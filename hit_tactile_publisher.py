@@ -19,37 +19,46 @@ from mc_core_interface.msg import TactileState, TactileActuator, TactileSensor
 
 # ==================== 配置 ====================
 
-SENSORS = [
+ACTUATORS = [
     {
-        'port': '/dev/ttyUSB0',
-        'channel': 0x12,
-        'sensor_id': 'hit_foot_left_1',
-        'mapping': 'foot',
+        'name': 'left_end',
+        'actuator_type': '2f_v1',
+        'sensors': [
+            {
+                'port': '/dev/ttyUSB0',
+                'channel': 0x12,
+                'sensor_id': 'hit_foot_left_1',
+                'mapping': 'foot',
+            },
+            {
+                'port': '/dev/ttyUSB2',
+                'channel': 0x32,
+                'sensor_id': 'hit_foot_left_2',
+                'mapping': 'foot',
+            },
+        ]
     },
     {
-        'port': '/dev/ttyUSB1',
-        'channel': 0x22,
-        'sensor_id': 'hit_foot_right_1',
-        'mapping': 'foot',
+        'name': 'right_end',
+        'actuator_type': '2f_v1',
+        'sensors': [
+            {
+                'port': '/dev/ttyUSB1',
+                'channel': 0x22,
+                'sensor_id': 'hit_foot_right_1',
+                'mapping': 'foot',
+            },
+            {
+                'port': '/dev/ttyUSB3',
+                'channel': 0x42,
+                'sensor_id': 'hit_foot_right_2',
+                'mapping': 'foot',
+            },
+        ]
     },
-    {
-        'port': '/dev/ttyUSB2',
-        'channel': 0x32,
-        'sensor_id': 'hit_foot_left_2',
-        'mapping': 'foot',
-    },
-    {
-        'port': '/dev/ttyUSB3',
-        'channel': 0x42,
-        'sensor_id': 'hit_foot_right_2',
-        'mapping': 'foot',
-    }
 ]
 
 SENSOR_BAUDRATE = 921600
-
-ACTUATOR_NAME = 'left_end'
-ACTUATOR_TYPE = '2f_v1'
 
 PUBLISH_RATE = 100.0  # Hz
 READ_INTERVAL = 0.005  # 5ms 读取间隔
@@ -61,7 +70,7 @@ LOG_INTERVAL = 1.0
 class HITDataReader:
     """独立线程持续读取多个 HIT 触觉传感器数据，启动时自动去底噪"""
 
-    def __init__(self, logger, sensor_configs=SENSORS,
+    def __init__(self, logger, actuator_configs=ACTUATORS,
                  baudrate: int = SENSOR_BAUDRATE):
         from HIT_Tactile_Sensor import HIT_Tactile_Sensor
 
@@ -74,16 +83,17 @@ class HITDataReader:
         self.running = False
         self.read_thread: Optional[threading.Thread] = None
 
-        for cfg in sensor_configs:
-            sid = cfg['sensor_id']
-            sensor = HIT_Tactile_Sensor(
-                port=cfg['port'], baudrate=baudrate,
-                channel=cfg['channel'], mapping=cfg['mapping']
-            )
-            self.sensors[sid] = sensor
-            self.grid_shapes[sid] = sensor.grid_shape
-            self.data_cache[sid] = None
-            self.base_offsets[sid] = None
+        for act in actuator_configs:
+            for cfg in act['sensors']:
+                sid = cfg['sensor_id']
+                sensor = HIT_Tactile_Sensor(
+                    port=cfg['port'], baudrate=baudrate,
+                    channel=cfg['channel'], mapping=cfg['mapping']
+                )
+                self.sensors[sid] = sensor
+                self.grid_shapes[sid] = sensor.grid_shape
+                self.data_cache[sid] = None
+                self.base_offsets[sid] = None
 
     def connect(self) -> bool:
         all_ok = True
@@ -166,7 +176,8 @@ class FakeHITPublisher(Node):
         super().__init__('fake_hit_tactile_publisher')
         from sensor_mapping import SensorMapping
         self.mappings = {
-            cfg['sensor_id']: SensorMapping(cfg['mapping']) for cfg in SENSORS
+            cfg['sensor_id']: SensorMapping(cfg['mapping'])
+            for act in ACTUATORS for cfg in act['sensors']
         }
 
         qos = QoSProfile(
@@ -180,33 +191,39 @@ class FakeHITPublisher(Node):
         self.get_logger().info(f'Fake HIT tactile publisher started at {PUBLISH_RATE}Hz')
 
     def publish_callback(self):
-        sensors = []
-        for index, cfg in enumerate(SENSORS):
-            mapping = self.mappings[cfg['sensor_id']]
-            sensor_count = mapping.get_sensor_count()
-            cx = sensor_count / 2 + (sensor_count / 4) * math.sin((self.frame + index * 25) * 0.05)
-            fake_flat = np.array([
-                math.exp(-((i - cx) ** 2) / 32.0) for i in range(sensor_count)
-            ], dtype=np.float32)
-            grid = mapping.map_data_to_grid(fake_flat)
+        actuators = []
+        sensor_index = 0
 
-            sensor_msg = TactileSensor()
-            sensor_msg.sensor_id = cfg['sensor_id']
-            sensor_msg.rows = grid.shape[0]
-            sensor_msg.cols = grid.shape[1]
-            sensor_msg.channels = 1
-            sensor_msg.data = grid.flatten().tolist()
-            sensors.append(sensor_msg)
+        for act_cfg in ACTUATORS:
+            sensors = []
+            for cfg in act_cfg['sensors']:
+                mapping = self.mappings[cfg['sensor_id']]
+                sensor_count = mapping.get_sensor_count()
+                cx = sensor_count / 2 + (sensor_count / 4) * math.sin((self.frame + sensor_index * 25) * 0.05)
+                fake_flat = np.array([
+                    math.exp(-((i - cx) ** 2) / 32.0) for i in range(sensor_count)
+                ], dtype=np.float32)
+                grid = mapping.map_data_to_grid(fake_flat)
 
-        actuator = TactileActuator()
-        actuator.name = ACTUATOR_NAME
-        actuator.actuator_type = ACTUATOR_TYPE
-        actuator.sensors = sensors
+                sensor_msg = TactileSensor()
+                sensor_msg.sensor_id = cfg['sensor_id']
+                sensor_msg.rows = grid.shape[0]
+                sensor_msg.cols = grid.shape[1]
+                sensor_msg.channels = 1
+                sensor_msg.data = grid.flatten().tolist()
+                sensors.append(sensor_msg)
+                sensor_index += 1
+
+            actuator = TactileActuator()
+            actuator.name = act_cfg['name']
+            actuator.actuator_type = act_cfg['actuator_type']
+            actuator.sensors = sensors
+            actuators.append(actuator)
 
         msg = TactileState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = ''
-        msg.actuators = [actuator]
+        msg.actuators = actuators
 
         self.publisher.publish(msg)
         self.frame += 1
@@ -236,38 +253,42 @@ class HITTactilePublisher(Node):
         self.get_logger().info(f'HIT tactile publisher started at {PUBLISH_RATE}Hz')
 
     def publish_callback(self):
-        sensors = []
+        actuators = []
         log_parts = []
 
-        for cfg in SENSORS:
-            grid = self.data_reader.get_cached_data(cfg['sensor_id'])
-            if grid is None:
-                continue
+        for act_cfg in ACTUATORS:
+            sensors = []
 
-            sensor_msg = TactileSensor()
-            sensor_msg.sensor_id = cfg['sensor_id']
-            sensor_msg.rows = grid.shape[0]
-            sensor_msg.cols = grid.shape[1]
-            sensor_msg.channels = 1
-            sensor_msg.data = grid.flatten().tolist()
-            sensors.append(sensor_msg)
+            for cfg in act_cfg['sensors']:
+                grid = self.data_reader.get_cached_data(cfg['sensor_id'])
+                if grid is None:
+                    continue
 
-            log_parts.append(
-                f"{cfg['sensor_id']}: sum={grid.sum():.3f} max={grid.max():.3f}"
-            )
+                sensor_msg = TactileSensor()
+                sensor_msg.sensor_id = cfg['sensor_id']
+                sensor_msg.rows = grid.shape[0]
+                sensor_msg.cols = grid.shape[1]
+                sensor_msg.channels = 1
+                sensor_msg.data = grid.flatten().tolist()
+                sensors.append(sensor_msg)
 
-        if not sensors:
+                log_parts.append(
+                    f"{cfg['sensor_id']}: sum={grid.sum():.3f} max={grid.max():.3f}"
+                )
+
+            actuator = TactileActuator()
+            actuator.name = act_cfg['name']
+            actuator.actuator_type = act_cfg['actuator_type']
+            actuator.sensors = sensors
+            actuators.append(actuator)
+
+        if not any(a.sensors for a in actuators):
             return
-
-        actuator = TactileActuator()
-        actuator.name = ACTUATOR_NAME
-        actuator.actuator_type = ACTUATOR_TYPE
-        actuator.sensors = sensors
 
         msg = TactileState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = ''
-        msg.actuators = [actuator]
+        msg.actuators = actuators
 
         self.publisher.publish(msg)
         self.frame += 1
