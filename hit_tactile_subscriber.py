@@ -13,7 +13,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from mc_core_interface.msg import TactileState
 
 
-SENSOR_IDS = ['hit_foot_left_1', 'hit_foot_right_1']
+SENSOR_IDS = ['hit_foot_left_1', 'hit_foot_right_1', 'hit_foot_left_2', 'hit_foot_right_2']
 
 
 class HITTactileSubscriber(Node):
@@ -31,12 +31,13 @@ class HITTactileSubscriber(Node):
         )
 
         plt.ion()
-        self.fig, self.axes = plt.subplots(1, 2, figsize=(14, 10))
+        self.fig, self.axes = plt.subplots(2, 2, figsize=(14, 12))
         self.fig.suptitle('HIT Tactile Sensors', fontsize=14)
 
         self.images = {}
         for idx, sid in enumerate(SENSOR_IDS):
-            ax = self.axes[idx]
+            row, col = divmod(idx, 2)
+            ax = self.axes[row, col]
             ax.set_title(sid)
             ax.set_xlabel('Column')
             ax.set_ylabel('Row')
@@ -63,7 +64,8 @@ class HITTactileSubscriber(Node):
                     continue
 
                 idx = SENSOR_IDS.index(sensor.sensor_id)
-                ax = self.axes[idx]
+                row, col = divmod(idx, 2)
+                ax = self.axes[row, col]
                 matrix = np.array(sensor.data).reshape(sensor.rows, sensor.cols)
 
                 threshold = 0.01

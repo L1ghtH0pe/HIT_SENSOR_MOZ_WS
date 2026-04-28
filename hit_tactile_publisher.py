@@ -21,17 +21,29 @@ from mc_core_interface.msg import TactileState, TactileActuator, TactileSensor
 
 SENSORS = [
     {
-        'port': '/dev/ttyUSB1',
-        'channel': 0x22,
+        'port': '/dev/ttyUSB0',
+        'channel': 0x12,
         'sensor_id': 'hit_foot_left_1',
         'mapping': 'foot',
     },
     {
-        'port': '/dev/ttyUSB2',
-        'channel': 0x12,
+        'port': '/dev/ttyUSB1',
+        'channel': 0x22,
         'sensor_id': 'hit_foot_right_1',
         'mapping': 'foot',
     },
+    {
+        'port': '/dev/ttyUSB2',
+        'channel': 0x32,
+        'sensor_id': 'hit_foot_left_2',
+        'mapping': 'foot',
+    },
+    {
+        'port': '/dev/ttyUSB3',
+        'channel': 0x42,
+        'sensor_id': 'hit_foot_right_2',
+        'mapping': 'foot',
+    }
 ]
 
 SENSOR_BAUDRATE = 921600
