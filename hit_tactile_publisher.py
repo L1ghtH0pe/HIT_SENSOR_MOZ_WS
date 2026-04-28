@@ -19,14 +19,25 @@ from mc_core_interface.msg import TactileState, TactileActuator, TactileSensor
 
 # ==================== 配置 ====================
 
-SENSOR_PORT = '/dev/ttyUSB0'
+SENSORS = [
+    {
+        'port': '/dev/ttyUSB1',
+        'channel': 0x22,
+        'sensor_id': 'hit_foot_left_1',
+        'mapping': 'foot',
+    },
+    {
+        'port': '/dev/ttyUSB2',
+        'channel': 0x12,
+        'sensor_id': 'hit_foot_right_1',
+        'mapping': 'foot',
+    },
+]
+
 SENSOR_BAUDRATE = 921600
-SENSOR_CHANNEL = 0x12
-SENSOR_MAPPING = 'foot'
 
 ACTUATOR_NAME = 'left_end'
 ACTUATOR_TYPE = '2f_v1'
-SENSOR_ID = 'hit_foot_left_1'
 
 PUBLISH_RATE = 100.0  # Hz
 READ_INTERVAL = 0.005  # 5ms 读取间隔
@@ -36,57 +47,67 @@ LOG_INTERVAL = 1.0
 # ==================== 数据读取器 ====================
 
 class HITDataReader:
-    """独立线程持续读取 HIT 触觉传感器数据，启动时自动去底噪"""
+    """独立线程持续读取多个 HIT 触觉传感器数据，启动时自动去底噪"""
 
-    def __init__(self, logger, port: str = SENSOR_PORT,
-                 baudrate: int = SENSOR_BAUDRATE,
-                 channel: int = SENSOR_CHANNEL,
-                 mapping: str = SENSOR_MAPPING):
+    def __init__(self, logger, sensor_configs=SENSORS,
+                 baudrate: int = SENSOR_BAUDRATE):
         from HIT_Tactile_Sensor import HIT_Tactile_Sensor
 
         self.logger = logger
-        self.sensor = HIT_Tactile_Sensor(
-            port=port, baudrate=baudrate,
-            channel=channel, mapping=mapping
-        )
-        self.grid_shape = self.sensor.grid_shape
-
-        self.data_cache: Optional[np.ndarray] = None
-        self.base_offset: Optional[np.ndarray] = None
+        self.sensors = {}
+        self.grid_shapes = {}
+        self.data_cache = {}
+        self.base_offsets = {}
         self.cache_lock = threading.Lock()
         self.running = False
         self.read_thread: Optional[threading.Thread] = None
 
+        for cfg in sensor_configs:
+            sid = cfg['sensor_id']
+            sensor = HIT_Tactile_Sensor(
+                port=cfg['port'], baudrate=baudrate,
+                channel=cfg['channel'], mapping=cfg['mapping']
+            )
+            self.sensors[sid] = sensor
+            self.grid_shapes[sid] = sensor.grid_shape
+            self.data_cache[sid] = None
+            self.base_offsets[sid] = None
+
     def connect(self) -> bool:
-        ok = self.sensor.connect()
-        if ok:
-            self.logger.info(f"HIT sensor connected on {self.sensor.port}")
-        else:
-            self.logger.error(f"HIT sensor connection failed on {self.sensor.port}")
-        return ok
+        all_ok = True
+        for sid, sensor in self.sensors.items():
+            ok = sensor.connect()
+            if ok:
+                self.logger.info(f"[{sid}] connected on {sensor.port}")
+            else:
+                self.logger.error(f"[{sid}] connection failed on {sensor.port}")
+                all_ok = False
+        return all_ok
 
     def _auto_calibrate(self, wait_time: float = 2.0, samples: int = 50):
         self.logger.info(f"等待传感器数据稳定 ({wait_time}s)，请勿触摸传感器...")
         time.sleep(wait_time)
 
         self.logger.info(f"正在自动采集初始底噪 (采样数: {samples})...")
-        collected = []
+        collected = {sid: [] for sid in self.sensors}
         for _ in range(samples):
-            grid = self.sensor.read_mapped(use_lock=True)
-            if grid is not None:
-                collected.append(grid)
+            for sid, sensor in self.sensors.items():
+                grid = sensor.read_mapped(use_lock=True)
+                if grid is not None:
+                    collected[sid].append(grid)
             time.sleep(0.1)
 
-        if collected:
-            self.base_offset = np.mean(collected, axis=0).astype(np.float32)
-            self.logger.info("校准完成，已保存初始底噪。")
-        else:
-            self.base_offset = np.zeros(self.grid_shape, dtype=np.float32)
-            self.logger.error("未采集到有效数据，校准失败！使用零偏移。")
+        for sid in self.sensors:
+            if collected[sid]:
+                self.base_offsets[sid] = np.mean(collected[sid], axis=0).astype(np.float32)
+                self.logger.info(f"[{sid}] 校准完成。")
+            else:
+                self.base_offsets[sid] = np.zeros(self.grid_shapes[sid], dtype=np.float32)
+                self.logger.error(f"[{sid}] 校准失败，使用零偏移。")
 
     def start(self):
         if not self.connect():
-            raise RuntimeError("无法连接传感器")
+            raise RuntimeError("无法连接所有传感器")
         self._auto_calibrate()
         self.running = True
         self.read_thread = threading.Thread(target=self._read_loop, daemon=True)
@@ -97,31 +118,33 @@ class HITDataReader:
         self.running = False
         if self.read_thread:
             self.read_thread.join(timeout=1.0)
-        self.sensor.disconnect()
-        self.logger.info("Sensor disconnected")
+        for sid, sensor in self.sensors.items():
+            sensor.disconnect()
+            self.logger.info(f"[{sid}] disconnected")
 
     def _read_loop(self):
         while self.running:
             start_time = time.time()
-            try:
-                grid = self.sensor.read_mapped(use_lock=True)
-                if grid is not None:
-                    processed = grid - self.base_offset
-                    processed = np.maximum(processed, 0)
-                    with self.cache_lock:
-                        self.data_cache = processed.astype(np.float32)
-            except Exception as e:
-                if self.running:
-                    self.logger.warn(f"读取失败: {e}")
+            for sid, sensor in self.sensors.items():
+                try:
+                    grid = sensor.read_mapped(use_lock=True)
+                    if grid is not None:
+                        processed = grid - self.base_offsets[sid]
+                        processed = np.maximum(processed, 0)
+                        with self.cache_lock:
+                            self.data_cache[sid] = processed.astype(np.float32)
+                except Exception as e:
+                    if self.running:
+                        self.logger.warn(f"[{sid}] 读取失败: {e}")
 
             elapsed = time.time() - start_time
             sleep_time = READ_INTERVAL - elapsed
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-    def get_cached_data(self) -> Optional[np.ndarray]:
+    def get_cached_data(self, sensor_id: str) -> Optional[np.ndarray]:
         with self.cache_lock:
-            return self.data_cache
+            return self.data_cache.get(sensor_id)
 
 
 # ==================== 假数据发布节点 ====================
@@ -130,7 +153,9 @@ class FakeHITPublisher(Node):
     def __init__(self):
         super().__init__('fake_hit_tactile_publisher')
         from sensor_mapping import SensorMapping
-        self.mapping = SensorMapping(SENSOR_MAPPING)
+        self.mappings = {
+            cfg['sensor_id']: SensorMapping(cfg['mapping']) for cfg in SENSORS
+        }
 
         qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
@@ -143,26 +168,28 @@ class FakeHITPublisher(Node):
         self.get_logger().info(f'Fake HIT tactile publisher started at {PUBLISH_RATE}Hz')
 
     def publish_callback(self):
-        rows, cols = self.mapping.grid_shape
-        sensor_count = self.mapping.get_sensor_count()
+        sensors = []
+        for index, cfg in enumerate(SENSORS):
+            mapping = self.mappings[cfg['sensor_id']]
+            sensor_count = mapping.get_sensor_count()
+            cx = sensor_count / 2 + (sensor_count / 4) * math.sin((self.frame + index * 25) * 0.05)
+            fake_flat = np.array([
+                math.exp(-((i - cx) ** 2) / 32.0) for i in range(sensor_count)
+            ], dtype=np.float32)
+            grid = mapping.map_data_to_grid(fake_flat)
 
-        cx = sensor_count / 2 + (sensor_count / 4) * math.sin(self.frame * 0.05)
-        fake_flat = np.array([
-            math.exp(-((i - cx) ** 2) / 32.0) for i in range(sensor_count)
-        ], dtype=np.float32)
-        grid = self.mapping.map_data_to_grid(fake_flat)
-
-        sensor_msg = TactileSensor()
-        sensor_msg.sensor_id = SENSOR_ID
-        sensor_msg.rows = grid.shape[0]
-        sensor_msg.cols = grid.shape[1]
-        sensor_msg.channels = 1
-        sensor_msg.data = grid.flatten().tolist()
+            sensor_msg = TactileSensor()
+            sensor_msg.sensor_id = cfg['sensor_id']
+            sensor_msg.rows = grid.shape[0]
+            sensor_msg.cols = grid.shape[1]
+            sensor_msg.channels = 1
+            sensor_msg.data = grid.flatten().tolist()
+            sensors.append(sensor_msg)
 
         actuator = TactileActuator()
         actuator.name = ACTUATOR_NAME
         actuator.actuator_type = ACTUATOR_TYPE
-        actuator.sensors = [sensor_msg]
+        actuator.sensors = sensors
 
         msg = TactileState()
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -197,21 +224,33 @@ class HITTactilePublisher(Node):
         self.get_logger().info(f'HIT tactile publisher started at {PUBLISH_RATE}Hz')
 
     def publish_callback(self):
-        grid = self.data_reader.get_cached_data()
-        if grid is None:
-            return
+        sensors = []
+        log_parts = []
 
-        sensor_msg = TactileSensor()
-        sensor_msg.sensor_id = SENSOR_ID
-        sensor_msg.rows = grid.shape[0]
-        sensor_msg.cols = grid.shape[1]
-        sensor_msg.channels = 1
-        sensor_msg.data = grid.flatten().tolist()
+        for cfg in SENSORS:
+            grid = self.data_reader.get_cached_data(cfg['sensor_id'])
+            if grid is None:
+                continue
+
+            sensor_msg = TactileSensor()
+            sensor_msg.sensor_id = cfg['sensor_id']
+            sensor_msg.rows = grid.shape[0]
+            sensor_msg.cols = grid.shape[1]
+            sensor_msg.channels = 1
+            sensor_msg.data = grid.flatten().tolist()
+            sensors.append(sensor_msg)
+
+            log_parts.append(
+                f"{cfg['sensor_id']}: sum={grid.sum():.3f} max={grid.max():.3f}"
+            )
+
+        if not sensors:
+            return
 
         actuator = TactileActuator()
         actuator.name = ACTUATOR_NAME
         actuator.actuator_type = ACTUATOR_TYPE
-        actuator.sensors = [sensor_msg]
+        actuator.sensors = sensors
 
         msg = TactileState()
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -222,11 +261,8 @@ class HITTactilePublisher(Node):
         self.frame += 1
 
         now = time.time()
-        if now - self.last_log_time >= LOG_INTERVAL:
-            self.get_logger().info(
-                f'{SENSOR_ID}: sum={grid.sum():.3f} max={grid.max():.3f} '
-                f'frame={self.frame}'
-            )
+        if log_parts and now - self.last_log_time >= LOG_INTERVAL:
+            self.get_logger().info(' | '.join(log_parts) + f' | frame={self.frame}')
             self.last_log_time = now
 
     def destroy_node(self):

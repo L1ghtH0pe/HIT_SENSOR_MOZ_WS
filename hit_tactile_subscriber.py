@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 HIT触觉传感器 ROS2 订阅节点
-订阅 /mx_tactile_state，实时显示 HIT 传感器的力分布热力图
+订阅 /mx_tactile_state，实时显示两路 HIT 传感器的力分布热力图
 """
 
 import numpy as np
@@ -13,7 +13,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from mc_core_interface.msg import TactileState
 
 
-SENSOR_ID = 'hit_foot_left_1'
+SENSOR_IDS = ['hit_foot_left_1', 'hit_foot_right_1']
 
 
 class HITTactileSubscriber(Node):
@@ -31,12 +31,16 @@ class HITTactileSubscriber(Node):
         )
 
         plt.ion()
-        self.fig, self.ax = plt.subplots(1, 1, figsize=(8, 10))
-        self.fig.suptitle('HIT Tactile Sensor', fontsize=14)
-        self.ax.set_title(SENSOR_ID)
-        self.ax.set_xlabel('Column')
-        self.ax.set_ylabel('Row')
-        self.image = None
+        self.fig, self.axes = plt.subplots(1, 2, figsize=(14, 10))
+        self.fig.suptitle('HIT Tactile Sensors', fontsize=14)
+
+        self.images = {}
+        for idx, sid in enumerate(SENSOR_IDS):
+            ax = self.axes[idx]
+            ax.set_title(sid)
+            ax.set_xlabel('Column')
+            ax.set_ylabel('Row')
+            self.images[sid] = None
 
         self.fig.tight_layout()
         plt.show(block=False)
@@ -47,7 +51,7 @@ class HITTactileSubscriber(Node):
     def callback(self, msg: TactileState):
         for actuator in msg.actuators:
             for sensor in actuator.sensors:
-                if sensor.sensor_id != SENSOR_ID:
+                if sensor.sensor_id not in SENSOR_IDS:
                     continue
 
                 expected = sensor.rows * sensor.cols * sensor.channels
@@ -58,6 +62,8 @@ class HITTactileSubscriber(Node):
                     )
                     continue
 
+                idx = SENSOR_IDS.index(sensor.sensor_id)
+                ax = self.axes[idx]
                 matrix = np.array(sensor.data).reshape(sensor.rows, sensor.cols)
 
                 threshold = 0.01
@@ -70,24 +76,26 @@ class HITTactileSubscriber(Node):
                 else:
                     vmax = 0.1
 
-                if self.image is None:
+                if self.images[sensor.sensor_id] is None:
                     cmap = cm.get_cmap('plasma')
                     cmap.set_bad(color='#2a2a2a')
 
-                    self.image = self.ax.imshow(
+                    im = ax.imshow(
                         masked_matrix, cmap=cmap,
                         vmin=threshold, vmax=vmax,
                         interpolation='nearest', origin='upper'
                     )
-                    self.ax.set_xlabel(f'Column (0-{sensor.cols - 1})')
-                    self.ax.set_ylabel(f'Row (0-{sensor.rows - 1})')
-                    self.fig.colorbar(self.image, ax=self.ax, fraction=0.046)
+                    ax.set_xlabel(f'Column (0-{sensor.cols - 1})')
+                    ax.set_ylabel(f'Row (0-{sensor.rows - 1})')
+                    self.fig.colorbar(im, ax=ax, fraction=0.046)
+                    self.images[sensor.sensor_id] = im
                     self.fig.tight_layout()
                 else:
-                    self.image.set_data(masked_matrix)
-                    self.image.set_clim(vmin=threshold, vmax=vmax)
+                    im = self.images[sensor.sensor_id]
+                    im.set_data(masked_matrix)
+                    im.set_clim(vmin=threshold, vmax=vmax)
 
-                self.ax.set_title(
+                ax.set_title(
                     f'{sensor.sensor_id} ({sensor.rows}x{sensor.cols})\n'
                     f'sum={matrix.sum():.2f}  max={matrix.max():.3f}  '
                     f'mean={matrix.mean():.4f}  p95={vmax:.3f}'
