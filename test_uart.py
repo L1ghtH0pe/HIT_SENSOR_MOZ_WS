@@ -139,6 +139,7 @@ def main():
 
                 # 每帧打印原始报文
                 print(f'[{ts}] #{frame_count:5d} | {hex_str}')
+                print(f'{len(response)} bytes')
 
             # 精确控制到 5ms 周期 (200 Hz)
             elapsed = time.perf_counter() - loop_start

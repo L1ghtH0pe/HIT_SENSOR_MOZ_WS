@@ -117,6 +117,7 @@ class HIT_Tactile_Sensor:
             raise RuntimeError(f"[{self.port}] 串口未连接")
 
         def _read():
+            response = None
             try:
                 # 构造GET请求帧
                 frame = self.protocol.make_get_frame(
@@ -126,11 +127,30 @@ class HIT_Tactile_Sensor:
                 frame.payload = b'\x01'
                 request_bytes = self.protocol.encode(frame)
 
-                # 发送请求并立即读取（依赖串口 timeout）
+                # 清空接收缓冲区，避免残留数据导致帧头/帧尾错位
+                self.ser.reset_input_buffer()
+                # 发送请求
                 self.ser.write(request_bytes)
-                response = self.ser.read(4096)
-                if not response:
+
+                # 先读取帧头(2) + channel(1) + flags(1) + length(2) = 6 字节
+                header = self.ser.read(6)
+                if len(header) < 6:
                     return None
+
+                # 解析 payload 长度 (小端序)
+                payload_len = header[4] | (header[5] << 8)
+                # 完整帧 = header(6) + payload + checksum(2) + tail(2)
+                remaining = payload_len + 4
+
+                # 继续读取剩余数据
+                body = self.ser.read(remaining)
+                if len(body) < remaining:
+                    # 数据不完整，尝试再读一次
+                    body += self.ser.read(remaining - len(body))
+
+                response = header + body
+                if len(response) < 6 + remaining:
+                    raise ValueError(f"帧不完整: 期望{6 + remaining}字节, 实际{len(response)}字节")
 
                 # 解析响应帧
                 response_frame = self.protocol.decode(response)
@@ -143,6 +163,8 @@ class HIT_Tactile_Sensor:
             except Exception as e:
                 self.error_count += 1
                 print(f"[{self.port}] 读取失败: {e}")
+                if response:
+                    print(f"[{self.port}] 原始报文 ({len(response)} bytes): {response.hex()}")
                 return None
 
         if use_lock:
