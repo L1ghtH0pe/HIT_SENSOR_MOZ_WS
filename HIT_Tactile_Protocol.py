@@ -1,4 +1,5 @@
 """HIT触觉传感器通信协议编解码"""
+from __future__ import annotations
 
 import struct
 from enum import IntEnum

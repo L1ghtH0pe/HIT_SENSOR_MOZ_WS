@@ -1,4 +1,5 @@
 """HIT触觉传感器类 - 支持多传感器并发读取"""
+from __future__ import annotations
 
 import serial
 import threading

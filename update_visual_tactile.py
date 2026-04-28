@@ -29,7 +29,7 @@ class TactileVisualizer:
         self.fig, self.ax = plt.subplots(
             figsize=(self.grid_cols * 0.8 + 2, self.grid_rows * 0.8 + 2)
         )
-        self.fig.canvas.manager.set_window_title('HIT触觉传感器热力图')
+        self.fig.canvas.manager.set_window_title('HIT Tactile Sensor Heatmap')
 
         self.ax.set_xlim(-0.5, self.grid_cols - 0.5)
         self.ax.set_ylim(-0.5, self.grid_rows - 0.5)
@@ -40,8 +40,8 @@ class TactileVisualizer:
         self.ax.set_yticks(np.arange(self.grid_rows))
         self.ax.set_xticklabels(np.arange(1, self.grid_cols + 1))
         self.ax.set_yticklabels(np.arange(1, self.grid_rows + 1))
-        self.ax.set_xlabel('列', fontsize=10)
-        self.ax.set_ylabel('行', fontsize=10)
+        self.ax.set_xlabel('Column', fontsize=10)
+        self.ax.set_ylabel('Row', fontsize=10)
 
         for spine in self.ax.spines.values():
             spine.set_visible(False)
@@ -87,8 +87,8 @@ class TactileVisualizer:
             self.texts.append(row_texts)
 
         self.title = self.ax.set_title(
-            f'触觉传感器阵列 ({self.grid_rows}x{self.grid_cols}, '
-            f'{self.mapping.get_sensor_count()}个传感器)',
+            f'Tactile Sensor Array ({self.grid_rows}x{self.grid_cols}, '
+            f'{self.mapping.get_sensor_count()} sensors)',
             fontsize=12, pad=10
         )
         self.fig.tight_layout()
@@ -122,8 +122,8 @@ class TactileVisualizer:
             elapsed = time.time() - self.start_time
             fps = self.frame_count / elapsed if elapsed > 0 else 0
             self.title.set_text(
-                f'触觉传感器阵列 ({self.grid_rows}x{self.grid_cols}) | '
-                f'端口: {self.sensor.port} | FPS: {fps:.1f} | 最大值: {int(max_value)}'
+                f'Tactile Sensor Array ({self.grid_rows}x{self.grid_cols}) | '
+                f'Port: {self.sensor.port} | FPS: {fps:.1f} | Max: {int(max_value)}'
             )
             artists.append(self.title)
 
