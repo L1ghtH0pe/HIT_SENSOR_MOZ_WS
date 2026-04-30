@@ -25,37 +25,37 @@ ACTUATORS = [
         'actuator_type': '2f_v1',
         'sensors': [
             {
-                'port': '/dev/ttyUSB0',
+                'port': '/dev/ttyUSB1',
                 'channel': 0x12,
                 'sensor_id': 'hit_foot_left_1',
                 'mapping': 'foot',
             },
             {
-                'port': '/dev/ttyUSB2',
-                'channel': 0x32,
+                'port': '/dev/ttyUSB0',
+                'channel': 0x22,
                 'sensor_id': 'hit_foot_left_2',
                 'mapping': 'foot',
             },
         ]
     },
-    {
-        'name': 'right_end',
-        'actuator_type': '2f_v1',
-        'sensors': [
-            {
-                'port': '/dev/ttyUSB1',
-                'channel': 0x22,
-                'sensor_id': 'hit_foot_right_1',
-                'mapping': 'foot',
-            },
-            {
-                'port': '/dev/ttyUSB3',
-                'channel': 0x42,
-                'sensor_id': 'hit_foot_right_2',
-                'mapping': 'foot',
-            },
-        ]
-    },
+    # {
+    #     'name': 'right_end',
+    #     'actuator_type': '2f_v1',
+    #     'sensors': [
+    #         {
+    #             'port': '/dev/ttyUSB2',
+    #             'channel': 0x32,
+    #             'sensor_id': 'hit_foot_right_1',
+    #             'mapping': 'foot',
+    #         },
+    #         {
+    #             'port': '/dev/ttyUSB3',
+    #             'channel': 0x42,
+    #             'sensor_id': 'hit_foot_right_2',
+    #             'mapping': 'foot',
+    #         },
+    #     ]
+    # },
 ]
 
 SENSOR_BAUDRATE = 921600
@@ -93,7 +93,7 @@ class HITDataReader:
                 self.sensors[sid] = sensor
                 self.grid_shapes[sid] = sensor.grid_shape
                 self.data_cache[sid] = None
-                self.base_offsets[sid] = None
+                self.base_offsets[sid] = np.zeros(sensor.grid_shape, dtype=np.float32)
 
     def connect(self) -> bool:
         all_ok = True
@@ -106,31 +106,9 @@ class HITDataReader:
                 all_ok = False
         return all_ok
 
-    def _auto_calibrate(self, wait_time: float = 2.0, samples: int = 50):
-        self.logger.info(f"等待传感器数据稳定 ({wait_time}s)，请勿触摸传感器...")
-        time.sleep(wait_time)
-
-        self.logger.info(f"正在自动采集初始底噪 (采样数: {samples})...")
-        collected = {sid: [] for sid in self.sensors}
-        for _ in range(samples):
-            for sid, sensor in self.sensors.items():
-                grid = sensor.read_mapped(use_lock=True)
-                if grid is not None:
-                    collected[sid].append(grid)
-            time.sleep(0.1)
-
-        for sid in self.sensors:
-            if collected[sid]:
-                self.base_offsets[sid] = np.mean(collected[sid], axis=0).astype(np.float32)
-                self.logger.info(f"[{sid}] 校准完成。")
-            else:
-                self.base_offsets[sid] = np.zeros(self.grid_shapes[sid], dtype=np.float32)
-                self.logger.error(f"[{sid}] 校准失败，使用零偏移。")
-
     def start(self):
         if not self.connect():
             raise RuntimeError("无法连接所有传感器")
-        self._auto_calibrate()
         self.running = True
         self.read_thread = threading.Thread(target=self._read_loop, daemon=True)
         self.read_thread.start()

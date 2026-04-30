@@ -149,7 +149,7 @@ class TactileVisualizer:
 def main():
     import sys
 
-    port = sys.argv[1] if len(sys.argv) > 1 else '/dev/ttyUSB0'
+    port = sys.argv[1] if len(sys.argv) > 1 else '/dev/ttyUSB1'
     mapping = sys.argv[2] if len(sys.argv) > 2 else 'foot'
     interval = int(sys.argv[3]) if len(sys.argv) > 3 else 50
 

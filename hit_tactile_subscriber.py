@@ -13,7 +13,8 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from mc_core_interface.msg import TactileState
 
 
-SENSOR_IDS = ['hit_foot_left_1', 'hit_foot_right_1', 'hit_foot_left_2', 'hit_foot_right_2']
+SENSOR_IDS = ['hit_foot_left_1','hit_foot_left_2']
+# SENSOR_IDS = ['hit_foot_left_1', 'hit_foot_right_1', 'hit_foot_left_2', 'hit_foot_right_2']
 
 
 class HITTactileSubscriber(Node):
