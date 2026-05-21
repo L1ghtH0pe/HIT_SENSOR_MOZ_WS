@@ -35,7 +35,7 @@ class HIT_Tactile_Sensor:
         baudrate: int = 921600,
         channel: int = 0x12,
         mode: FrameMode = FrameMode.PEER,
-        timeout: float = 0.1,
+        timeout: float = 0.01,  # 降低超时到10ms，提高响应速度
         mapping: str = "foot"
     ):
         self.port = port
@@ -63,6 +63,8 @@ class HIT_Tactile_Sensor:
         # 统计信息
         self.frame_count = 0
         self.error_count = 0
+        self.timeout_count = 0
+        self.last_read_time = 0.0
 
     def connect(self) -> bool:
         """连接串口
@@ -118,6 +120,7 @@ class HIT_Tactile_Sensor:
 
         def _read():
             response = None
+            read_start = time.time()
             try:
                 # 构造GET请求帧
                 frame = self.protocol.make_get_frame(
@@ -127,14 +130,18 @@ class HIT_Tactile_Sensor:
                 frame.payload = b'\x01'
                 request_bytes = self.protocol.encode(frame)
 
-                # 清空接收缓冲区，避免残留数据导致帧头/帧尾错位
-                self.ser.reset_input_buffer()
+                # 只在缓冲区有大量数据时才清空，避免丢失正在传输的数据
+                if self.ser.in_waiting > 200:  # 超过200字节才清空
+                    self.ser.reset_input_buffer()
+
                 # 发送请求
                 self.ser.write(request_bytes)
+                self.ser.flush()  # 确保数据发送完成
 
                 # 先读取帧头(2) + channel(1) + flags(1) + length(2) = 6 字节
                 header = self.ser.read(6)
                 if len(header) < 6:
+                    self.timeout_count += 1
                     return None
 
                 # 解析 payload 长度 (小端序)
@@ -158,12 +165,17 @@ class HIT_Tactile_Sensor:
                     response_frame.payload
                 )
                 self.frame_count += 1
+                self.last_read_time = time.time()
                 return sensor_data
 
             except Exception as e:
                 self.error_count += 1
-                print(f"[{self.port}] 读取失败: {e}")
-                if response:
+                read_duration = time.time() - read_start
+                if read_duration > 0.05:  # 超过50ms才报超时
+                    print(f"[{self.port}] 读取超时 {read_duration*1000:.1f}ms: {e}")
+                elif self.error_count <= 3:  # 只打印前3次错误
+                    print(f"[{self.port}] 读取失败: {e}")
+                if response and len(response) < 100:  # 只打印小报文
                     print(f"[{self.port}] 原始报文 ({len(response)} bytes): {response.hex()}")
                 return None
 
