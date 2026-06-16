@@ -160,7 +160,14 @@ class STM32Sender:
             return False
         try:
             self._ser = serial.Serial(port, baudrate=115200, timeout=0.1,
-                                      write_timeout=0.5)
+                                      write_timeout=1.0)
+            # STM32 CDC 固件需要 DTR 置位才会接收/处理 USB 数据，
+            # 否则 write 会因下位机不取数据而超时（Write timeout）
+            try:
+                self._ser.setDTR(True)
+                self._ser.setRTS(True)
+            except Exception:
+                pass
             self._cur_port = port
             self.logger.info(f'STM32 connected on {port}')
             return True
