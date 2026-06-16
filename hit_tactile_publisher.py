@@ -208,6 +208,7 @@ class HITDataReader:
         self.cache_lock = threading.Lock()
         self.running = False
         self.read_threads: List[threading.Thread] = []
+        self.connected_sids: List[str] = []
 
         # 性能统计
         self.read_counts = {}
@@ -232,23 +233,37 @@ class HITDataReader:
                 self.base_offsets[sid] = np.zeros(sensor.grid_shape, dtype=np.float32)
 
     def connect(self) -> bool:
-        all_ok = True
+        """连接所有传感器，记录成功连上的。返回是否至少有一个连上。"""
+        self.connected_sids = []
         for sid, sensor in self.sensors.items():
-            ok = sensor.connect()
+            try:
+                ok = sensor.connect()
+            except Exception as e:
+                ok = False
+                self.logger.error(f"[{sid}] connect 异常: {e}")
             if ok:
                 self.logger.info(f"[{sid}] connected on {sensor.port}")
+                self.connected_sids.append(sid)
             else:
                 self.logger.error(f"[{sid}] connection failed on {sensor.port}")
-                all_ok = False
-        return all_ok
+        total = len(self.sensors)
+        n = len(self.connected_sids)
+        if n == total:
+            self.logger.info(f"全部 {total} 个传感器连接成功")
+        elif n > 0:
+            self.logger.warn(
+                f"部分连接：{n}/{total} 个传感器在线 "
+                f"({', '.join(self.connected_sids)})，其余跳过")
+        return n > 0
 
     def start(self):
         if not self.connect():
-            raise RuntimeError("无法连接所有传感器")
+            raise RuntimeError("没有任何传感器连接成功，请检查设备连接和权限")
         self.running = True
 
-        # 为每个传感器启动独立读取线程
-        for sid, sensor in self.sensors.items():
+        # 只为成功连上的传感器启动读取线程
+        for sid in self.connected_sids:
+            sensor = self.sensors[sid]
             thread = threading.Thread(
                 target=self._read_loop_single,
                 args=(sid, sensor),
@@ -264,9 +279,13 @@ class HITDataReader:
         self.running = False
         for thread in self.read_threads:
             thread.join(timeout=1.0)
-        for sid, sensor in self.sensors.items():
-            sensor.disconnect()
-            self.logger.info(f"[{sid}] disconnected")
+        # 只断开成功连上的传感器
+        for sid in getattr(self, 'connected_sids', list(self.sensors.keys())):
+            try:
+                self.sensors[sid].disconnect()
+                self.logger.info(f"[{sid}] disconnected")
+            except Exception:
+                pass
 
     def _read_loop_single(self, sensor_id: str, sensor):
         """单个传感器的独立读取循环"""
