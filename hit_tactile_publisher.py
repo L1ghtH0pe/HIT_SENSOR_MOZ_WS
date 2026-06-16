@@ -25,15 +25,33 @@ ACTUATORS = [
         'actuator_type': '2f_v1',
         'sensors': [
             {
-                'port': '/dev/ttyUSB1',
-                'channel': 0x12,
+                'port': '/dev/ttyUSB0',
+                'channel': 0x12,  # device_id=0x01
                 'sensor_id': 'hit_foot_left_1',
                 'mapping': 'foot',
             },
             {
-                'port': '/dev/ttyUSB0',
-                'channel': 0x22,
+                'port': '/dev/ttyUSB1',
+                'channel': 0x22,  # device_id=0x02
                 'sensor_id': 'hit_foot_left_2',
+                'mapping': 'foot',
+            },
+        ]
+    },
+    {
+        'name': 'right_end',
+        'actuator_type': '2f_v1',
+        'sensors': [
+            {
+                'port': '/dev/ttyUSB2',
+                'channel': 0x32,  # device_id=0x03
+                'sensor_id': 'hit_foot_right_1',
+                'mapping': 'foot',
+            },
+            {
+                'port': '/dev/ttyUSB3',
+                'channel': 0x42,  # device_id=0x04
+                'sensor_id': 'hit_foot_right_2',
                 'mapping': 'foot',
             },
         ]

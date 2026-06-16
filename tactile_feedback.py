@@ -205,6 +205,14 @@ DEFAULT_PRESS_ON = 300.0
 DEFAULT_PRESS_OFF = 30.0
 DEFAULT_RESYNC_INTERVAL = 2.0
 DEFAULT_METRIC = 'sum'
+DEFAULT_HAND = 'left'  # 'left' / 'right' / 'both'
+
+# hand 参数对应的 actuator 名称
+HAND_TO_ACTUATOR = {
+    'left':  ['left_end'],
+    'right': ['right_end'],
+    'both':  ['left_end', 'right_end'],
+}
 
 
 class TactileFeedbackNode(Node):
@@ -217,6 +225,7 @@ class TactileFeedbackNode(Node):
         self.declare_parameter('press_off', DEFAULT_PRESS_OFF)
         self.declare_parameter('port_override', '')
         self.declare_parameter('resync_interval', DEFAULT_RESYNC_INTERVAL)
+        self.declare_parameter('hand', DEFAULT_HAND)
 
         self.sensor_id = self.get_parameter('sensor_id').value
         self.metric = self.get_parameter('metric').value
@@ -224,6 +233,16 @@ class TactileFeedbackNode(Node):
         self.press_off = float(self.get_parameter('press_off').value)
         self.resync_interval = float(self.get_parameter('resync_interval').value)
         port_override = self.get_parameter('port_override').value
+
+        # 解析 hand 参数，得到要监听的 actuator 名称白名单
+        hand = str(self.get_parameter('hand').value).lower().strip()
+        if hand not in HAND_TO_ACTUATOR:
+            self.get_logger().warn(
+                f"未知的 hand 参数 '{hand}'，回退到 '{DEFAULT_HAND}'。"
+                f"支持的值：{list(HAND_TO_ACTUATOR.keys())}")
+            hand = DEFAULT_HAND
+        self.hand = hand
+        self.allowed_actuators = set(HAND_TO_ACTUATOR[hand])
 
         if self.press_off >= self.press_on:
             self.get_logger().warn(
@@ -249,14 +268,18 @@ class TactileFeedbackNode(Node):
         self.sender.start()
 
         self.get_logger().info(
-            f'tactile_feedback started: monitoring ALL sensors '
+            f'tactile_feedback started: hand={self.hand} '
+            f'(actuators={sorted(self.allowed_actuators)}) '
             f'metric={self.metric} thresholds={self.press_off}/{self.press_on}'
         )
 
     def _extract_grid(self, msg: TactileState) -> Optional[np.ndarray]:
-        """提取所有传感器的数据，返回最大值网格"""
+        """提取所选手（hand 参数指定）的传感器数据，融合后返回最大值网格"""
         all_grids = []
         for actuator in msg.actuators:
+            # 只处理白名单内的 actuator（左手/右手/全部）
+            if actuator.name not in self.allowed_actuators:
+                continue
             for sensor in actuator.sensors:
                 expected = sensor.rows * sensor.cols * max(sensor.channels, 1)
                 if len(sensor.data) != expected or expected == 0:
@@ -269,11 +292,10 @@ class TactileFeedbackNode(Node):
         if not all_grids:
             return None
 
-        # 如果有多个传感器，取每个位置的最大值
+        # 单个传感器直接返回；多个传感器逐元素取最大值
         if len(all_grids) == 1:
             return all_grids[0]
         else:
-            # 多个传感器：逐元素取最大值
             return np.maximum.reduce(all_grids)
 
     def callback(self, msg: TactileState):

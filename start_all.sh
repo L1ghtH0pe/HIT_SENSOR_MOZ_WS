@@ -57,6 +57,7 @@ echo -e "\n${Y}[4/4] 启动节点...${N}"
 PRESS_OFF="${PRESS_OFF:-30.0}"
 PRESS_ON="${PRESS_ON:-300.0}"
 METRIC="${METRIC:-sum}"
+HAND="${HAND:-left}"  # left / right / both
 
 ENV_CMD="source $ROS_SETUP && [ -f $ROS2_WS_SETUP ] && source $ROS2_WS_SETUP; cd $WS_DIR"
 HOLD_CMD='echo; echo "[已退出] 按回车关闭窗口"; read'
@@ -92,12 +93,12 @@ fi
 sleep 3
 
 # Feedback
-FB_CMD="python3 tactile_feedback.py --ros-args -p press_off:=$PRESS_OFF -p press_on:=$PRESS_ON -p metric:=$METRIC"
+FB_CMD="python3 tactile_feedback.py --ros-args -p press_off:=$PRESS_OFF -p press_on:=$PRESS_ON -p metric:=$METRIC -p hand:=$HAND"
 if [ "$MODE" = "gui" ] && start_gui "HIT Feedback" "$FB_CMD"; then
-    echo -e "${G}  ✓ Feedback 启动 (metric=$METRIC 阈值 $PRESS_OFF/$PRESS_ON)${N}"
+    echo -e "${G}  ✓ Feedback 启动 (hand=$HAND metric=$METRIC 阈值 $PRESS_OFF/$PRESS_ON)${N}"
 else
     start_bg "feedback" "$FB_CMD"
-    echo -e "${G}  ✓ Feedback 启动 (后台, metric=$METRIC 阈值 $PRESS_OFF/$PRESS_ON)${N}"
+    echo -e "${G}  ✓ Feedback 启动 (后台, hand=$HAND metric=$METRIC 阈值 $PRESS_OFF/$PRESS_ON)${N}"
 fi
 sleep 1
 
