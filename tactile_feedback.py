@@ -69,10 +69,37 @@ def crc16_mcrf4xx(data: bytes, init: int = 0xFFFF) -> int:
     return crc & 0xFFFF
 
 
-def build_frame(flag: int) -> bytes:
-    payload = bytes((0xA5, flag & 0xFF))
+def build_frame(flag: int, target: int = 127, range_val: int = 20) -> bytes:
+    """
+    构造 6 字节下发帧：[0xA5, flag, target, range, crc_lo, crc_hi]
+
+    Args:
+        flag: 当前力度等级 (0-255)
+        target: 目标值 (1-255)，下位机以此为中心计算目标区间
+        range_val: 目标范围 (0-127)，目标区间为 [target-range, target+range]
+    """
+    target = max(1, min(255, target))  # 限制 1-255
+    range_val = max(0, min(127, range_val))  # 限制 0-127
+    payload = bytes((0xA5, flag & 0xFF, target & 0xFF, range_val & 0xFF))
     crc = crc16_mcrf4xx(payload)
     return payload + bytes((crc & 0xFF, (crc >> 8) & 0xFF))
+
+
+def parse_stm32_frame(data: bytes) -> Optional[dict]:
+    """
+    解析下位机回传的 6 字节帧：[0x5A, flag, target, range, crc_lo, crc_hi]
+
+    Returns:
+        {'flag': int, 'target': int, 'range': int} 或 None（校验失败）
+    """
+    if len(data) != 6 or data[0] != 0x5A:
+        return None
+    payload = data[:4]
+    crc_recv = data[4] | (data[5] << 8)
+    crc_calc = crc16_mcrf4xx(payload)
+    if crc_recv != crc_calc:
+        return None
+    return {'flag': data[1], 'target': data[2], 'range': data[3]}
 
 
 # ==================== STM32 USB CDC 客户端 ====================
@@ -99,7 +126,7 @@ class STM32Sender:
         self.port_override = port_override.strip()
         self._ser: Optional[serial.Serial] = None
         self._cur_port: Optional[str] = None
-        self._queue: 'queue.Queue[Optional[int]]' = queue.Queue()
+        self._queue: 'queue.Queue[Optional[tuple]]' = queue.Queue()  # 存储 (flag, target, range) 或 None
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._io_loop,
                                         name='STM32Sender', daemon=True)
@@ -107,14 +134,16 @@ class STM32Sender:
     def start(self):
         self._thread.start()
 
-    def send_flag(self, flag: int):
+    def send_command(self, flag: int, target: int, range_val: int):
+        """发送 flag + target + range 到下位机"""
         if self._stop.is_set():
             return
-        self._queue.put(int(flag) & 0xFF)
+        # 队列存储 (flag, target, range) 三元组
+        self._queue.put((int(flag) & 0xFF, int(target) & 0xFF, int(range_val) & 0xFF))
 
     def close(self, reset: bool = True):
         if reset:
-            self._queue.put(0)
+            self._queue.put((0, 127, 20))  # 发送复位命令
         self._stop.set()
         self._queue.put(None)  # 唤醒 IO 线程
         self._thread.join(timeout=2.0)
@@ -151,8 +180,8 @@ class STM32Sender:
                 self.logger.info(f'STM32 disconnected from {self._cur_port}')
                 self._cur_port = None
 
-    def _drain_latest(self, first: Optional[int]) -> Optional[int]:
-        """合并队列中连续相同/最新的 flag，返回最后一个真正的值"""
+    def _drain_latest(self, first: Optional[tuple]) -> Optional[tuple]:
+        """合并队列中的最新命令（flag, target, range），返回最后一个"""
         latest = first
         try:
             while True:
@@ -162,6 +191,7 @@ class STM32Sender:
                 latest = v
         except queue.Empty:
             pass
+        return latest
         return latest
 
     def _io_loop(self):
@@ -181,19 +211,20 @@ class STM32Sender:
             if first is None:
                 continue
 
-            flag = self._drain_latest(first)
-            if flag is None:
+            cmd = self._drain_latest(first)
+            if cmd is None:
                 continue
 
-            frame = build_frame(flag)
+            flag, target, range_val = cmd
+            frame = build_frame(flag, target, range_val)
             try:
                 self._ser.write(frame)
             except (serial.SerialException, OSError) as e:
                 self.logger.warn(f'STM32 write failed: {e}, will reconnect')
                 self._close_port()
-                # 把这个 flag 重新放回，重连后立即同步
+                # 把这个命令重新放回，重连后立即同步
                 try:
-                    self._queue.put_nowait(flag)
+                    self._queue.put_nowait(cmd)
                 except queue.Full:
                     pass
 
@@ -206,6 +237,8 @@ DEFAULT_PRESS_OFF = 30.0
 DEFAULT_RESYNC_INTERVAL = 2.0
 DEFAULT_METRIC = 'sum'
 DEFAULT_HAND = 'left'  # 'left' / 'right' / 'both'
+DEFAULT_TARGET = 127   # 下位机目标值，范围 1-255
+DEFAULT_RANGE = 20     # 下位机目标范围，范围 0-127
 
 # hand 参数对应的 actuator 名称
 HAND_TO_ACTUATOR = {
@@ -226,6 +259,8 @@ class TactileFeedbackNode(Node):
         self.declare_parameter('port_override', '')
         self.declare_parameter('resync_interval', DEFAULT_RESYNC_INTERVAL)
         self.declare_parameter('hand', DEFAULT_HAND)
+        self.declare_parameter('target', DEFAULT_TARGET)
+        self.declare_parameter('range', DEFAULT_RANGE)
 
         self.sensor_id = self.get_parameter('sensor_id').value
         self.metric = self.get_parameter('metric').value
@@ -233,6 +268,13 @@ class TactileFeedbackNode(Node):
         self.press_off = float(self.get_parameter('press_off').value)
         self.resync_interval = float(self.get_parameter('resync_interval').value)
         port_override = self.get_parameter('port_override').value
+
+        # 读取下位机参数：target 和 range
+        self.stm32_target = int(self.get_parameter('target').value)
+        self.stm32_range = int(self.get_parameter('range').value)
+        # 限制范围
+        self.stm32_target = max(1, min(255, self.stm32_target))
+        self.stm32_range = max(0, min(127, self.stm32_range))
 
         # 解析 hand 参数，得到要监听的 actuator 名称白名单
         hand = str(self.get_parameter('hand').value).lower().strip()
@@ -267,10 +309,15 @@ class TactileFeedbackNode(Node):
         self.sender = STM32Sender(self.get_logger(), port_override=port_override)
         self.sender.start()
 
+        # 计算目标区间（便于日志显示）
+        target_low = max(0, self.stm32_target - self.stm32_range)
+        target_high = min(255, self.stm32_target + self.stm32_range)
+
         self.get_logger().info(
             f'tactile_feedback started: hand={self.hand} '
             f'(actuators={sorted(self.allowed_actuators)}) '
-            f'metric={self.metric} thresholds={self.press_off}/{self.press_on}'
+            f'metric={self.metric} thresholds={self.press_off}/{self.press_on} '
+            f'STM32_target={self.stm32_target}±{self.stm32_range} ({target_low}-{target_high})'
         )
 
     def _extract_grid(self, msg: TactileState) -> Optional[np.ndarray]:
@@ -358,7 +405,7 @@ class TactileFeedbackNode(Node):
 
         # 发送条件：状态翻转 or 心跳 or 力度显著变化
         if edge or heartbeat or (self.state_alarm and force_changed):
-            self.sender.send_flag(force)
+            self.sender.send_command(force, self.stm32_target, self.stm32_range)
             self._last_force = force
             self.last_send_time = now
             if edge:
