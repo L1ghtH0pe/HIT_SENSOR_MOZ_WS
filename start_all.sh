@@ -3,7 +3,21 @@
 # 自动检测设备、修正端口配置、启动 publisher + feedback + 可视化
 
 WS_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROS_SETUP="/opt/ros/foxy/setup.bash"
+# 自动检测 ROS2 版本（优先级：环境变量 > 已source的版本 > 自动扫描 /opt/ros）
+if [ -n "$ROS_DISTRO_OVERRIDE" ] && [ -f "/opt/ros/$ROS_DISTRO_OVERRIDE/setup.bash" ]; then
+    ROS_DISTRO_DETECTED="$ROS_DISTRO_OVERRIDE"
+elif [ -n "$ROS_DISTRO" ] && [ -f "/opt/ros/$ROS_DISTRO/setup.bash" ]; then
+    ROS_DISTRO_DETECTED="$ROS_DISTRO"
+else
+    # 按优先级扫描常见版本
+    for d in jazzy humble foxy iron galactic; do
+        if [ -f "/opt/ros/$d/setup.bash" ]; then
+            ROS_DISTRO_DETECTED="$d"
+            break
+        fi
+    done
+fi
+ROS_SETUP="/opt/ros/$ROS_DISTRO_DETECTED/setup.bash"
 ROS2_WS_SETUP="$HOME/ros2_ws/install/setup.bash"
 LOG_DIR="$WS_DIR/logs"
 mkdir -p "$LOG_DIR"
@@ -44,11 +58,11 @@ echo -e "${G}  ✓ 端口配置正确（已手动配置两个传感器）${N}"
 
 # ------- 3. 检查 ROS 环境 -------
 echo -e "\n${Y}[3/4] 检查 ROS2 环境...${N}"
-[ ! -f "$ROS_SETUP" ] && { echo -e "${R}✗ ROS2 Foxy 未安装${N}"; exit 1; }
+[ ! -f "$ROS_SETUP" ] && { echo -e "${R}✗ 未检测到 ROS2 (在 /opt/ros 下未找到任何已知版本)${N}"; exit 1; }
 if [ -f "$ROS2_WS_SETUP" ]; then
-    echo -e "${G}  ✓ ROS2 Foxy + ros2_ws 就绪${N}"
+    echo -e "${G}  ✓ ROS2 $ROS_DISTRO_DETECTED + ros2_ws 就绪${N}"
 else
-    echo -e "${Y}  ⚠ ros2_ws 不存在，仅加载系统 ROS2${N}"
+    echo -e "${Y}  ⚠ ros2_ws 不存在，仅加载系统 ROS2 $ROS_DISTRO_DETECTED${N}"
 fi
 
 # ------- 4. 启动节点 -------
