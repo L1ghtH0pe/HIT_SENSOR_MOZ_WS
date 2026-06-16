@@ -25,13 +25,14 @@ ACTUATORS = [
         'actuator_type': '2f_v1',
         'sensors': [
             {
-                'port': '/dev/ttyUSB0',
+                # udev 固定符号链接 -> 物理USB口绑定，不受ttyUSB编号变化影响
+                'port': '/dev/hit_tactile_left_1',
                 'channel': 0x12,  # device_id=0x01
                 'sensor_id': 'hit_foot_left_1',
                 'mapping': 'foot',
             },
             {
-                'port': '/dev/ttyUSB1',
+                'port': '/dev/hit_tactile_left_2',
                 'channel': 0x22,  # device_id=0x02
                 'sensor_id': 'hit_foot_left_2',
                 'mapping': 'foot',
@@ -43,13 +44,13 @@ ACTUATORS = [
         'actuator_type': '2f_v1',
         'sensors': [
             {
-                'port': '/dev/ttyUSB2',
+                'port': '/dev/hit_tactile_right_1',
                 'channel': 0x32,  # device_id=0x03
                 'sensor_id': 'hit_foot_right_1',
                 'mapping': 'foot',
             },
             {
-                'port': '/dev/ttyUSB3',
+                'port': '/dev/hit_tactile_right_2',
                 'channel': 0x42,  # device_id=0x04
                 'sensor_id': 'hit_foot_right_2',
                 'mapping': 'foot',
@@ -73,6 +74,7 @@ DATA_FRESHNESS_THRESHOLD = 0.015  # 15ms，超过此时间不发布数据
 
 import struct
 import glob
+import os
 import serial as _serial
 
 
@@ -140,35 +142,42 @@ def detect_device_id(port: str, baudrate: int = SENSOR_BAUDRATE,
 
 
 def resolve_ports(actuator_configs, logger=None) -> None:
-    """扫描所有 ttyUSB 端口，按 device_id 自动匹配并就地修正每个传感器的 port。
+    """校验每个传感器配置的端口，并按 device_id 做一致性检查。
 
-    channel 高 4 位即 device_id。无论 ttyUSB 编号如何变化，
-    都能把每个传感器连到正确的物理端口。
+    本项目使用 udev 固定符号链接（/dev/hit_tactile_*），符号链接由物理USB口
+    绑定，编号不会变化。这里只探测配置里实际用到的端口（符号链接），
+    不再扫描全部 /dev/ttyUSB*，从而避开 RM500Q(5G模块) 等无关串口设备。
+
+    - 若端口能探测到 device_id 且与配置的 channel 匹配 -> 正常
+    - 若探测到的 device_id 与配置不符 -> 仅警告（可能是符号链接绑错口）
+    - 若端口不存在/无响应 -> 仅警告，保留配置（交给后续 connect 处理）
     """
-    ports = sorted(glob.glob('/dev/ttyUSB*'))
-    id_to_port = {}
-    for p in ports:
-        did = detect_device_id(p)
-        if did is not None:
-            id_to_port[did] = p
-            if logger:
-                logger.info(f"探测到 {p} -> device_id=0x{did:02X}")
-
     for act in actuator_configs:
         for cfg in act['sensors']:
+            port = cfg['port']
             want_id = (cfg['channel'] >> 4) & 0x0F
-            matched = id_to_port.get(want_id)
-            if matched is None:
+
+            if not os.path.exists(port):
                 if logger:
-                    logger.error(
-                        f"[{cfg['sensor_id']}] 未找到 device_id=0x{want_id:02X} 的端口，"
-                        f"保留配置端口 {cfg['port']}")
+                    logger.warn(
+                        f"[{cfg['sensor_id']}] 端口 {port} 不存在，"
+                        f"请检查 udev 符号链接或设备连接")
                 continue
-            if matched != cfg['port'] and logger:
-                logger.warn(
-                    f"[{cfg['sensor_id']}] device_id=0x{want_id:02X}: "
-                    f"端口 {cfg['port']} -> {matched} (自动修正)")
-            cfg['port'] = matched
+
+            got_id = detect_device_id(port)
+            if got_id is None:
+                if logger:
+                    logger.warn(
+                        f"[{cfg['sensor_id']}] {port} 无响应（device_id 期望0x{want_id:02X}）")
+            elif got_id != want_id:
+                if logger:
+                    logger.warn(
+                        f"[{cfg['sensor_id']}] {port} 实际 device_id=0x{got_id:02X}，"
+                        f"但配置期望 0x{want_id:02X}（符号链接可能绑错物理口）")
+            else:
+                if logger:
+                    logger.info(
+                        f"[{cfg['sensor_id']}] {port} -> device_id=0x{got_id:02X} ✓")
 
 
 # ==================== 数据读取器 ====================

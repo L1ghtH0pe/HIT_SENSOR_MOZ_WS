@@ -30,12 +30,15 @@ echo -e "========================================${N}"
 
 # ------- 1. 检测设备 -------
 echo -e "\n${Y}[1/4] 检测硬件设备...${N}"
-TACTILE_PORT=$(ls /dev/ttyUSB* 2>/dev/null | head -1)
+# 触觉传感器用 udev 固定符号链接 /dev/hit_tactile_*（避开 RM500Q 等无关 ttyUSB）
+TACTILE_LINKS=$(ls /dev/hit_tactile_* 2>/dev/null)
+TACTILE_COUNT=$(echo "$TACTILE_LINKS" | grep -c hit_tactile)
 STM32_PORT=$(ls /dev/ttyACM* 2>/dev/null | head -1)
 
-if [ -z "$TACTILE_PORT" ]; then
-    echo -e "${R}✗ 未检测到触觉传感器 (/dev/ttyUSB*)${N}"
-    echo "  请检查 USB 连接、传感器电源"
+if [ -z "$TACTILE_LINKS" ]; then
+    echo -e "${R}✗ 未检测到触觉传感器符号链接 (/dev/hit_tactile_*)${N}"
+    echo "  请确认 udev 规则已安装，传感器已连接上电"
+    echo "  （可运行 'ls -l /dev/hit_tactile_*' 检查）"
     exit 1
 fi
 if [ -z "$STM32_PORT" ]; then
@@ -43,8 +46,17 @@ if [ -z "$STM32_PORT" ]; then
     echo "  请检查 STM32 USB 连接"
     exit 1
 fi
-echo -e "${G}  ✓ 触觉传感器: $TACTILE_PORT${N}"
+echo -e "${G}  ✓ 触觉传感器: 检测到 $TACTILE_COUNT 个${N}"
+echo "$TACTILE_LINKS" | sed 's/^/      /'
 echo -e "${G}  ✓ STM32 下位机: $STM32_PORT${N}"
+
+# 自动修正符号链接权限（设备重新插拔后权限会重置为 root）
+for link in $TACTILE_LINKS; do
+    if [ ! -w "$link" ]; then
+        sudo chmod 666 "$link" 2>/dev/null && \
+            echo -e "${Y}  已修正 $link 权限${N}"
+    fi
+done
 
 # ------- 2. 修正 publisher 端口配置 -------
 echo -e "\n${Y}[2/4] 检查端口配置...${N}"
