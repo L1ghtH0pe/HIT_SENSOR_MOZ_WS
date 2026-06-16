@@ -284,19 +284,51 @@ class TactileFeedbackNode(Node):
         v = float(grid.sum()) if self.metric == 'sum' else float(grid.max())
         now = time.time()
 
-        # 力度映射到 0-255
-        if v <= self.press_off:
-            force = 0
-        elif v >= self.press_on:
-            force = 255
+        # 三阶段力度引导映射
+        # 目标：sum=100±20 (80-120)
+        # 编码：0-84(太弱) | 85-170(目标) | 171-255(太强)
+        TARGET_CENTER = 150.0
+        TARGET_RANGE = 20.0
+        TARGET_LOW = TARGET_CENTER - TARGET_RANGE   # 80
+        TARGET_HIGH = TARGET_CENTER + TARGET_RANGE  # 120
+
+        STAGE_WEAK_MAX = 84
+        STAGE_TARGET_MIN = 85
+        STAGE_TARGET_MAX = 170
+        STAGE_STRONG_MIN = 171
+
+        if v < TARGET_LOW:
+            # 阶段1：太弱 (sum < 80)
+            # 映射到 0-84，越接近目标值越大
+            ratio = v / TARGET_LOW if TARGET_LOW > 0 else 0
+            force = int(ratio * STAGE_WEAK_MAX)
+        elif v <= TARGET_HIGH:
+            # 阶段2：目标区间 (80 <= sum <= 120)
+            # 映射到 85-170，中心点127
+            ratio = (v - TARGET_LOW) / (TARGET_HIGH - TARGET_LOW)
+            force = int(STAGE_TARGET_MIN + ratio * (STAGE_TARGET_MAX - STAGE_TARGET_MIN))
         else:
-            # 线性插值
-            force = int((v - self.press_off) / (self.press_on - self.press_off) * 255)
+            # 阶段3：太强 (sum > 120)
+            # 映射到 171-255，超出越多值越大
+            # 设定一个合理的上限，比如 sum=300 对应 force=255
+            max_over = 180.0  # sum超出120后再+180达到满量程
+            over = min(v - TARGET_HIGH, max_over)
+            ratio = over / max_over
+            force = int(STAGE_STRONG_MIN + ratio * (255 - STAGE_STRONG_MIN))
+
         force = max(0, min(255, force))
 
-        # 状态判定
+        # 状态判定和阶段识别
         prev_alarm = self.state_alarm
         self.state_alarm = (force > 0)
+
+        # 判断当前阶段（用于日志）
+        if force <= STAGE_WEAK_MAX:
+            stage = "WEAK"
+        elif force <= STAGE_TARGET_MAX:
+            stage = "TARGET"
+        else:
+            stage = "STRONG"
 
         edge = self.state_alarm != prev_alarm
         heartbeat = (now - self.last_send_time) >= self.resync_interval
@@ -310,15 +342,15 @@ class TactileFeedbackNode(Node):
             if edge:
                 self.get_logger().info(
                     f'state -> {"ALARM" if self.state_alarm else "IDLE"} '
-                    f'(force={force} v={v:.3f})'
+                    f'(force={force} v={v:.1f} stage={stage})'
                 )
             elif force_changed:
-                self.get_logger().info(f'force updated: {force} (v={v:.3f})')
+                self.get_logger().info(f'force updated: {force} (v={v:.1f} stage={stage})')
 
         self.frame_count += 1
         if now - self.last_log_time >= 5.0:
             self.get_logger().info(
-                f'frames={self.frame_count} v={v:.3f} force={force} '
+                f'frames={self.frame_count} v={v:.1f} force={force} stage={stage} '
                 f'state={"ALARM" if self.state_alarm else "IDLE"}'
             )
             self.last_log_time = now
