@@ -142,20 +142,24 @@ def detect_device_id(port: str, baudrate: int = SENSOR_BAUDRATE,
 
 
 def resolve_ports(actuator_configs, logger=None) -> None:
-    """校验每个传感器配置的端口，并按 device_id 做一致性检查。
+    """探测每个符号链接端口实际的 device_id，动态设置 channel。
 
-    本项目使用 udev 固定符号链接（/dev/hit_tactile_*），符号链接由物理USB口
-    绑定，编号不会变化。这里只探测配置里实际用到的端口（符号链接），
-    不再扫描全部 /dev/ttyUSB*，从而避开 RM500Q(5G模块) 等无关串口设备。
+    设计：
+    - 端口用 udev 固定符号链接（/dev/hit_tactile_*），由物理USB口绑定，
+      保证「左手口→left名、右手口→right名」恒定。
+    - 但哪个 device_id 的传感器插在哪个口是不固定的（取决于接线），
+      所以这里探测该口实际的 device_id，用它覆盖 channel 的高4位。
+      channel 低4位（通道号，固定0x2）保留。
+    - 只探测配置里用到的符号链接端口，不扫描全部 ttyUSB，避开 RM500Q。
 
-    - 若端口能探测到 device_id 且与配置的 channel 匹配 -> 正常
-    - 若探测到的 device_id 与配置不符 -> 仅警告（可能是符号链接绑错口）
-    - 若端口不存在/无响应 -> 仅警告，保留配置（交给后续 connect 处理）
+    这样无论传感器怎么插，只要插对了「左/右手对应的物理口」，
+    就能用正确的 device_id 通信。
     """
     for act in actuator_configs:
         for cfg in act['sensors']:
             port = cfg['port']
-            want_id = (cfg['channel'] >> 4) & 0x0F
+            cfg_id = (cfg['channel'] >> 4) & 0x0F
+            chan_lo = cfg['channel'] & 0x0F  # 通道号，通常 0x2
 
             if not os.path.exists(port):
                 if logger:
@@ -168,16 +172,22 @@ def resolve_ports(actuator_configs, logger=None) -> None:
             if got_id is None:
                 if logger:
                     logger.warn(
-                        f"[{cfg['sensor_id']}] {port} 无响应（device_id 期望0x{want_id:02X}）")
-            elif got_id != want_id:
+                        f"[{cfg['sensor_id']}] {port} 无响应，保留配置 "
+                        f"channel=0x{cfg['channel']:02X}")
+                continue
+
+            new_channel = ((got_id & 0x0F) << 4) | chan_lo
+            if new_channel != cfg['channel']:
+                cfg['channel'] = new_channel
                 if logger:
                     logger.warn(
-                        f"[{cfg['sensor_id']}] {port} 实际 device_id=0x{got_id:02X}，"
-                        f"但配置期望 0x{want_id:02X}（符号链接可能绑错物理口）")
+                        f"[{cfg['sensor_id']}] {port} 实际 device_id=0x{got_id:02X} "
+                        f"(配置原为0x{cfg_id:02X})，channel 自动设为 0x{new_channel:02X}")
             else:
                 if logger:
                     logger.info(
-                        f"[{cfg['sensor_id']}] {port} -> device_id=0x{got_id:02X} ✓")
+                        f"[{cfg['sensor_id']}] {port} -> device_id=0x{got_id:02X} "
+                        f"channel=0x{new_channel:02X} ✓")
 
 
 # ==================== 数据读取器 ====================
