@@ -130,13 +130,15 @@ class HIT_Tactile_Sensor:
                 frame.payload = b'\x01'
                 request_bytes = self.protocol.encode(frame)
 
-                # 只在缓冲区有大量数据时才清空，避免丢失正在传输的数据
-                if self.ser.in_waiting > 200:  # 超过200字节才清空
-                    self.ser.reset_input_buffer()
+                # 每次读取前清空缓冲区，避免残留数据导致帧同步错误
+                self.ser.reset_input_buffer()
 
                 # 发送请求
                 self.ser.write(request_bytes)
                 self.ser.flush()  # 确保数据发送完成
+
+                # 等待传感器响应（传感器需要处理时间）
+                time.sleep(0.003)  # 3ms等待时间
 
                 # 先读取帧头(2) + channel(1) + flags(1) + length(2) = 6 字节
                 header = self.ser.read(6)

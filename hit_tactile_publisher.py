@@ -38,24 +38,6 @@ ACTUATORS = [
             },
         ]
     },
-    # {
-    #     'name': 'right_end',
-    #     'actuator_type': '2f_v1',
-    #     'sensors': [
-    #         {
-    #             'port': '/dev/ttyUSB2',
-    #             'channel': 0x32,
-    #             'sensor_id': 'hit_foot_right_1',
-    #             'mapping': 'foot',
-    #         },
-    #         {
-    #             'port': '/dev/ttyUSB3',
-    #             'channel': 0x42,
-    #             'sensor_id': 'hit_foot_right_2',
-    #             'mapping': 'foot',
-    #         },
-    #     ]
-    # },
 ]
 
 SENSOR_BAUDRATE = 921600
@@ -64,6 +46,111 @@ PUBLISH_RATE = 100.0  # Hz
 READ_INTERVAL = 0.005  # 5ms 读取间隔 (200Hz)
 LOG_INTERVAL = 10.0
 DATA_FRESHNESS_THRESHOLD = 0.015  # 15ms，超过此时间不发布数据
+
+
+# ==================== 端口自动检测 ====================
+# ttyUSB 编号由 USB 枚举顺序决定，重新插拔/重启后可能对调。
+# 这里在启动时扫描每个端口的 device_id，按 device_id 自动匹配端口，
+# 不再依赖写死的 port，避免连错传感器。
+
+import struct
+import glob
+import serial as _serial
+
+
+def _scan_crc16(data: bytes) -> int:
+    crc = 0x0000
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xA001 if (crc & 0x0001) else (crc >> 1)
+    return crc & 0xFFFF
+
+
+def _build_probe_frame(device_id: int, channel: int = 0x02) -> bytes:
+    id_chan = ((device_id & 0x0F) << 4) | (channel & 0x0F)
+    payload = b'\x01'
+    length = struct.pack('<H', len(payload))
+    checksum = struct.pack('<H', _scan_crc16(payload))
+    return b'\x3C\x3C' + bytes([id_chan, 0x01]) + length + payload + checksum + b'\x3E\x3E'
+
+
+def _has_valid_response(data: bytes) -> bool:
+    i = 0
+    while i < len(data) - 9:
+        if data[i:i+2] != b'\x3C\x3C':
+            i += 1
+            continue
+        plen = struct.unpack('<H', data[i+4:i+6])[0]
+        frame_len = 2 + 1 + 1 + 2 + plen + 2 + 2
+        if i + frame_len > len(data):
+            i += 1
+            continue
+        if data[i+frame_len-2:i+frame_len] != b'\x3E\x3E':
+            i += 1
+            continue
+        recv_payload = data[i+6:i+6+plen]
+        recv_crc = struct.unpack('<H', data[i+6+plen:i+8+plen])[0]
+        if recv_crc == _scan_crc16(recv_payload):
+            return True
+        i += 1
+    return False
+
+
+def detect_device_id(port: str, baudrate: int = SENSOR_BAUDRATE,
+                     id_range=range(1, 8)) -> Optional[int]:
+    """探测指定串口上的设备 ID，返回第一个响应的 ID，无响应返回 None"""
+    try:
+        ser = _serial.Serial(port, baudrate, timeout=0.1)
+    except Exception:
+        return None
+    try:
+        time.sleep(0.05)
+        for dev_id in id_range:
+            try:
+                ser.reset_input_buffer()
+                ser.write(_build_probe_frame(dev_id))
+                time.sleep(0.02)
+                resp = ser.read(4096)
+                if resp and _has_valid_response(resp):
+                    return dev_id
+            except Exception:
+                pass
+    finally:
+        ser.close()
+    return None
+
+
+def resolve_ports(actuator_configs, logger=None) -> None:
+    """扫描所有 ttyUSB 端口，按 device_id 自动匹配并就地修正每个传感器的 port。
+
+    channel 高 4 位即 device_id。无论 ttyUSB 编号如何变化，
+    都能把每个传感器连到正确的物理端口。
+    """
+    ports = sorted(glob.glob('/dev/ttyUSB*'))
+    id_to_port = {}
+    for p in ports:
+        did = detect_device_id(p)
+        if did is not None:
+            id_to_port[did] = p
+            if logger:
+                logger.info(f"探测到 {p} -> device_id=0x{did:02X}")
+
+    for act in actuator_configs:
+        for cfg in act['sensors']:
+            want_id = (cfg['channel'] >> 4) & 0x0F
+            matched = id_to_port.get(want_id)
+            if matched is None:
+                if logger:
+                    logger.error(
+                        f"[{cfg['sensor_id']}] 未找到 device_id=0x{want_id:02X} 的端口，"
+                        f"保留配置端口 {cfg['port']}")
+                continue
+            if matched != cfg['port'] and logger:
+                logger.warn(
+                    f"[{cfg['sensor_id']}] device_id=0x{want_id:02X}: "
+                    f"端口 {cfg['port']} -> {matched} (自动修正)")
+            cfg['port'] = matched
 
 
 # ==================== 数据读取器 ====================
@@ -82,6 +169,10 @@ class HITDataReader:
         from HIT_Tactile_Sensor import HIT_Tactile_Sensor
 
         self.logger = logger
+
+        # 启动时按 device_id 自动匹配端口，避免 ttyUSB 编号变化导致连错
+        resolve_ports(actuator_configs, logger)
+
         self.sensors = {}
         self.grid_shapes = {}
         self.data_cache = {}
