@@ -57,18 +57,23 @@ class HITTactileSubscriber(Node):
                 if sensor.sensor_id not in SENSOR_IDS:
                     continue
 
-                expected = sensor.rows * sensor.cols * sensor.channels
-                if len(sensor.data) != expected:
+                # 校验：data 至少要够 rows*cols 个值；channels 字段可能为 0/1，
+                # 都按平面网格处理，避免严格校验把空 channels 的有效数据丢掉
+                expected = sensor.rows * sensor.cols
+                if expected == 0 or len(sensor.data) < expected:
                     self.get_logger().warn(
                         f'{sensor.sensor_id}: data size mismatch '
-                        f'(expected {expected}, got {len(sensor.data)})'
+                        f'(rows={sensor.rows} cols={sensor.cols} '
+                        f'channels={sensor.channels} got {len(sensor.data)})'
                     )
                     continue
+                # 只取前 rows*cols 个值（多通道情况只显示第一通道）
+                data_flat = list(sensor.data)[:expected]
 
                 idx = SENSOR_IDS.index(sensor.sensor_id)
                 row, col = divmod(idx, 2)
                 ax = self.axes[row, col]
-                matrix = np.array(sensor.data).reshape(sensor.rows, sensor.cols)
+                matrix = np.array(data_flat).reshape(sensor.rows, sensor.cols)
 
                 threshold = 0.01
                 masked_matrix = np.ma.masked_where(matrix < threshold, matrix)
