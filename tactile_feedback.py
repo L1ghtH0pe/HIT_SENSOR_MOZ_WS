@@ -244,7 +244,7 @@ DEFAULT_PRESS_OFF = 30.0
 DEFAULT_RESYNC_INTERVAL = 2.0
 DEFAULT_METRIC = 'sum'
 DEFAULT_HAND = 'left'  # 'left' / 'right' / 'both'
-DEFAULT_FUSION = 'sum'  # 'max': 逐点取最大 (避免重复计数) / 'sum': 直接相加
+DEFAULT_FUSION = 'maxsum'  # 'maxsum': 各自sum取最大 / 'sum': 逐点相加 / 'max': 逐点取最大
 DEFAULT_TARGET = 127   # 下位机目标值，范围 1-255
 DEFAULT_RANGE = 43     # 下位机目标范围，默认 ±43 (force 84-170 三段边界)
 DEFAULT_SUM_MAX = 1000.0  # sum 归一化上限：sum [0, SUM_MAX] -> force [0, 255]
@@ -336,8 +336,8 @@ class TactileFeedbackNode(Node):
             f'STM32_target={self.stm32_target}±{self.stm32_range} ({target_low}-{target_high})'
         )
 
-    def _extract_grid(self, msg: TactileState) -> Optional[np.ndarray]:
-        """提取所选手（hand 参数指定）的传感器数据，融合后返回最大值网格"""
+    def _extract_grid(self, msg: TactileState) -> Optional[list]:
+        """提取所选手（hand 参数指定）的传感器数据，返回网格列表"""
         all_grids = []
         for actuator in msg.actuators:
             # 只处理白名单内的 actuator（左手/右手/全部）
@@ -352,26 +352,33 @@ class TactileFeedbackNode(Node):
                 )
                 all_grids.append(grid)
 
-        if not all_grids:
-            return None
-
-        # 单个传感器直接返回
-        if len(all_grids) == 1:
-            return all_grids[0]
-
-        # 多个传感器融合：fusion='max' 逐点取最大 (避免重复计数)，
-        # fusion='sum' 直接相加 (重叠区域会累加，force 虚高)
-        if self.fusion == 'sum':
-            return np.sum(all_grids, axis=0)
-        else:  # 默认 'max'
-            return np.maximum.reduce(all_grids)
+        return all_grids if all_grids else None
 
     def callback(self, msg: TactileState):
-        grid = self._extract_grid(msg)
-        if grid is None:
+        all_grids = self._extract_grid(msg)
+        if not all_grids:
             return
 
-        v = float(grid.sum()) if self.metric == 'sum' else float(grid.max())
+        # 融合多个传感器的数据：
+        # - 'maxsum': 每个传感器各自sum，取最大的那个sum (默认)
+        # - 'sum': 先融合网格(逐点相加)，再sum整个网格
+        # - 'max': 先融合网格(逐点取最大)，再sum整个网格
+        if len(all_grids) == 1:
+            # 单个传感器直接用
+            v = float(all_grids[0].sum()) if self.metric == 'sum' else float(all_grids[0].max())
+        else:
+            if self.fusion == 'maxsum':
+                # 每个传感器各自sum，取最大值
+                sums = [grid.sum() for grid in all_grids]
+                v = float(max(sums))
+            elif self.fusion == 'sum':
+                # 逐点相加再sum
+                fused_grid = np.sum(all_grids, axis=0)
+                v = float(fused_grid.sum()) if self.metric == 'sum' else float(fused_grid.max())
+            else:  # 'max' 逐点取最大
+                fused_grid = np.maximum.reduce(all_grids)
+                v = float(fused_grid.sum()) if self.metric == 'sum' else float(fused_grid.max())
+
         now = time.time()
 
         # 简单线性归一化：sum [0, sum_max] -> force [0, 255]
