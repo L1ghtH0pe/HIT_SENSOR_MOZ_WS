@@ -209,6 +209,9 @@ class HITDataReader:
 
         # 启动时按 device_id 自动匹配端口，避免 ttyUSB 编号变化导致连错
         resolve_ports(actuator_configs, logger)
+        # 探测会快速 open/close 串口，二级 USB Hub 上的设备需要时间恢复，
+        # 否则后续 connect 会阻塞 3 秒后失败。这里给一个稳定窗口。
+        time.sleep(1.5)
 
         self.sensors = {}
         self.grid_shapes = {}
@@ -242,20 +245,41 @@ class HITDataReader:
                 self.data_timestamps[sid] = 0.0
                 self.base_offsets[sid] = np.zeros(sensor.grid_shape, dtype=np.float32)
 
-    def connect(self) -> bool:
-        """连接所有传感器，记录成功连上的。返回是否至少有一个连上。"""
+    def connect(self, max_retries: int = 3, retry_delay: float = 1.0) -> bool:
+        """连接所有传感器，失败的重试 max_retries 次。返回是否至少有一个连上。
+
+        二级 USB Hub 下的设备 (如本项目右手两个) 在快速 open/close 后
+        首次 connect 容易阻塞 ~3s 后失败，重试一两次通常就能成功。
+        """
         self.connected_sids = []
         for sid, sensor in self.sensors.items():
-            try:
-                ok = sensor.connect()
-            except Exception as e:
-                ok = False
-                self.logger.error(f"[{sid}] connect 异常: {e}")
-            if ok:
-                self.logger.info(f"[{sid}] connected on {sensor.port}")
-                self.connected_sids.append(sid)
-            else:
-                self.logger.error(f"[{sid}] connection failed on {sensor.port}")
+            ok = False
+            last_err = ''
+            for attempt in range(1, max_retries + 1):
+                try:
+                    ok = sensor.connect()
+                except Exception as e:
+                    ok = False
+                    last_err = str(e)
+                if ok:
+                    if attempt > 1:
+                        self.logger.info(
+                            f"[{sid}] connected on {sensor.port} (第{attempt}次尝试)")
+                    else:
+                        self.logger.info(f"[{sid}] connected on {sensor.port}")
+                    self.connected_sids.append(sid)
+                    break
+                # 失败则等待后重试
+                if attempt < max_retries:
+                    self.logger.warn(
+                        f"[{sid}] 第{attempt}次连接失败 ({sensor.port})，"
+                        f"{retry_delay:.1f}s 后重试")
+                    time.sleep(retry_delay)
+            if not ok:
+                msg = f"[{sid}] connection failed on {sensor.port} (重试{max_retries}次)"
+                if last_err:
+                    msg += f": {last_err}"
+                self.logger.error(msg)
         total = len(self.sensors)
         n = len(self.connected_sids)
         if n == total:
