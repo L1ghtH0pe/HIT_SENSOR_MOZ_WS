@@ -88,6 +88,16 @@ TARGET="${TARGET:-127}"  # 下位机目标值 (1-255)
 RANGE="${RANGE:-43}"     # 下位机目标范围 (0-127)，默认±43对应force三段边界
 SUM_MAX="${SUM_MAX:-1000}"  # sum归一化上限：sum [0,SUM_MAX] -> force [0,255]
 
+# ROS2 jazzy 严格类型检查：DOUBLE 类型参数必须带小数点
+# 用户传 SUM_MAX=500 这种整数会报 InvalidParameterTypeException
+for var in PRESS_OFF PRESS_ON SUM_MAX; do
+    val="${!var}"
+    case "$val" in
+      *.*) ;;                       # 已有小数点
+      *)   eval "$var=\"${val}.0\"" ;;  # 自动补 .0
+    esac
+done
+
 ENV_CMD="source $ROS_SETUP && [ -f $ROS2_WS_SETUP ] && source $ROS2_WS_SETUP; cd $WS_DIR"
 HOLD_CMD='echo; echo "[已退出] 按回车关闭窗口"; read'
 
