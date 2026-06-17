@@ -14,8 +14,8 @@ from mc_core_interface.msg import TactileState
 
 
 # 2x2 布局：上排左手两个，下排右手两个
-SENSOR_IDS = ['hit_foot_left_1', 'hit_foot_left_2',
-              'hit_foot_right_1', 'hit_foot_right_2']
+SENSOR_IDS = ['hit_gripper_left_1', 'hit_gripper_left_2',
+              'hit_gripper_right_1', 'hit_gripper_right_2']
 
 
 class HITTactileSubscriber(Node):
@@ -101,7 +101,7 @@ class HITTactileSubscriber(Node):
 
                 ax.set_title(
                     f'{sensor.sensor_id} ({sensor.rows}x{sensor.cols})\n'
-                    f'sum={matrix.sum():.2f}  max={matrix.max():.3f}  '
+                    f'force={matrix.sum()/1000.*9.8:.2f}N sum={matrix.sum():.2f}  max={matrix.max():.3f}  '
                     f'mean={matrix.mean():.4f}  p95={vmax:.3f}'
                 )
 

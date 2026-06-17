@@ -28,13 +28,13 @@ ACTUATORS = [
                 # udev 固定符号链接 -> 物理USB口绑定，不受ttyUSB编号变化影响
                 'port': '/dev/hit_tactile_left_1',
                 'channel': 0x12,  # device_id=0x01
-                'sensor_id': 'hit_foot_left_1',
+                'sensor_id': 'hit_gripper_left_1',
                 'mapping': 'foot',
             },
             {
                 'port': '/dev/hit_tactile_left_2',
                 'channel': 0x22,  # device_id=0x02
-                'sensor_id': 'hit_foot_left_2',
+                'sensor_id': 'hit_gripper_left_2',
                 'mapping': 'foot',
             },
         ]
@@ -46,13 +46,13 @@ ACTUATORS = [
             {
                 'port': '/dev/hit_tactile_right_1',
                 'channel': 0x32,  # device_id=0x03
-                'sensor_id': 'hit_foot_right_1',
+                'sensor_id': 'hit_gripper_right_1',
                 'mapping': 'foot',
             },
             {
                 'port': '/dev/hit_tactile_right_2',
                 'channel': 0x42,  # device_id=0x04
-                'sensor_id': 'hit_foot_right_2',
+                'sensor_id': 'hit_gripper_right_2',
                 'mapping': 'foot',
             },
         ]
