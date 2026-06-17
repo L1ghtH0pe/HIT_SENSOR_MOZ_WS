@@ -84,6 +84,7 @@ PRESS_OFF="${PRESS_OFF:-30.0}"
 PRESS_ON="${PRESS_ON:-300.0}"
 METRIC="${METRIC:-sum}"
 HAND="${HAND:-left}"  # left / right / both
+FUSION="${FUSION:-max}"  # max: 逐点取最大(避免重复计数) / sum: 直接相加(重叠虚高)
 TARGET="${TARGET:-127}"  # 下位机目标值 (1-255)
 RANGE="${RANGE:-43}"     # 下位机目标范围 (0-127)，默认±43对应force三段边界
 SUM_MAX="${SUM_MAX:-1000}"  # sum归一化上限：sum [0,SUM_MAX] -> force [0,255]
@@ -132,7 +133,7 @@ fi
 sleep 3
 
 # Feedback
-FB_CMD="python3 tactile_feedback.py --ros-args -p press_off:=$PRESS_OFF -p press_on:=$PRESS_ON -p metric:=$METRIC -p hand:=$HAND -p target:=$TARGET -p range:=$RANGE -p sum_max:=$SUM_MAX"
+FB_CMD="python3 tactile_feedback.py --ros-args -p press_off:=$PRESS_OFF -p press_on:=$PRESS_ON -p metric:=$METRIC -p hand:=$HAND -p fusion:=$FUSION -p target:=$TARGET -p range:=$RANGE -p sum_max:=$SUM_MAX"
 TARGET_LOW=$((TARGET > RANGE ? TARGET - RANGE : 0))
 TARGET_HIGH=$((TARGET + RANGE > 255 ? 255 : TARGET + RANGE))
 if [ "$MODE" = "gui" ] && start_gui "HIT Feedback" "$FB_CMD"; then

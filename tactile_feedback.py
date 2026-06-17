@@ -244,6 +244,7 @@ DEFAULT_PRESS_OFF = 30.0
 DEFAULT_RESYNC_INTERVAL = 2.0
 DEFAULT_METRIC = 'sum'
 DEFAULT_HAND = 'left'  # 'left' / 'right' / 'both'
+DEFAULT_FUSION = 'max'  # 'max': 逐点取最大 (避免重复计数) / 'sum': 直接相加
 DEFAULT_TARGET = 127   # 下位机目标值，范围 1-255
 DEFAULT_RANGE = 43     # 下位机目标范围，默认 ±43 (force 84-170 三段边界)
 DEFAULT_SUM_MAX = 1000.0  # sum 归一化上限：sum [0, SUM_MAX] -> force [0, 255]
@@ -267,12 +268,14 @@ class TactileFeedbackNode(Node):
         self.declare_parameter('port_override', '')
         self.declare_parameter('resync_interval', DEFAULT_RESYNC_INTERVAL)
         self.declare_parameter('hand', DEFAULT_HAND)
+        self.declare_parameter('fusion', DEFAULT_FUSION)
         self.declare_parameter('target', DEFAULT_TARGET)
         self.declare_parameter('range', DEFAULT_RANGE)
         self.declare_parameter('sum_max', DEFAULT_SUM_MAX)
 
         self.sensor_id = self.get_parameter('sensor_id').value
         self.metric = self.get_parameter('metric').value
+        self.fusion = self.get_parameter('fusion').value
         self.press_on = float(self.get_parameter('press_on').value)
         self.press_off = float(self.get_parameter('press_off').value)
         self.resync_interval = float(self.get_parameter('resync_interval').value)
@@ -329,7 +332,7 @@ class TactileFeedbackNode(Node):
         self.get_logger().info(
             f'tactile_feedback started: hand={self.hand} '
             f'(actuators={sorted(self.allowed_actuators)}) '
-            f'metric={self.metric} sum_max={self.sum_max:.0f} '
+            f'metric={self.metric} fusion={self.fusion} sum_max={self.sum_max:.0f} '
             f'STM32_target={self.stm32_target}±{self.stm32_range} ({target_low}-{target_high})'
         )
 
@@ -352,10 +355,15 @@ class TactileFeedbackNode(Node):
         if not all_grids:
             return None
 
-        # 单个传感器直接返回；多个传感器逐元素取最大值
+        # 单个传感器直接返回
         if len(all_grids) == 1:
             return all_grids[0]
-        else:
+
+        # 多个传感器融合：fusion='max' 逐点取最大 (避免重复计数)，
+        # fusion='sum' 直接相加 (重叠区域会累加，force 虚高)
+        if self.fusion == 'sum':
+            return np.sum(all_grids, axis=0)
+        else:  # 默认 'max'
             return np.maximum.reduce(all_grids)
 
     def callback(self, msg: TactileState):
