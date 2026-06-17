@@ -238,14 +238,15 @@ class STM32Sender:
 
 # ==================== ROS2 节点 ====================
 
-DEFAULT_SENSOR_ID = 'hit_foot_left_2'
+DEFAULT_SENSOR_ID = 'hit_gripper_left_2'
 DEFAULT_PRESS_ON = 300.0
 DEFAULT_PRESS_OFF = 30.0
 DEFAULT_RESYNC_INTERVAL = 2.0
 DEFAULT_METRIC = 'sum'
 DEFAULT_HAND = 'left'  # 'left' / 'right' / 'both'
 DEFAULT_TARGET = 127   # 下位机目标值，范围 1-255
-DEFAULT_RANGE = 20     # 下位机目标范围，范围 0-127
+DEFAULT_RANGE = 43     # 下位机目标范围，默认 ±43 (force 84-170 三段边界)
+DEFAULT_SUM_MAX = 1000.0  # sum 归一化上限：sum [0, SUM_MAX] -> force [0, 255]
 
 # hand 参数对应的 actuator 名称
 HAND_TO_ACTUATOR = {
@@ -268,6 +269,7 @@ class TactileFeedbackNode(Node):
         self.declare_parameter('hand', DEFAULT_HAND)
         self.declare_parameter('target', DEFAULT_TARGET)
         self.declare_parameter('range', DEFAULT_RANGE)
+        self.declare_parameter('sum_max', DEFAULT_SUM_MAX)
 
         self.sensor_id = self.get_parameter('sensor_id').value
         self.metric = self.get_parameter('metric').value
@@ -282,6 +284,10 @@ class TactileFeedbackNode(Node):
         # 限制范围
         self.stm32_target = max(1, min(255, self.stm32_target))
         self.stm32_range = max(0, min(127, self.stm32_range))
+        # sum 归一化上限（>0），实测建议 500-2000 之间
+        self.sum_max = float(self.get_parameter('sum_max').value)
+        if self.sum_max <= 0:
+            self.sum_max = DEFAULT_SUM_MAX
 
         # 解析 hand 参数，得到要监听的 actuator 名称白名单
         hand = str(self.get_parameter('hand').value).lower().strip()
@@ -323,7 +329,7 @@ class TactileFeedbackNode(Node):
         self.get_logger().info(
             f'tactile_feedback started: hand={self.hand} '
             f'(actuators={sorted(self.allowed_actuators)}) '
-            f'metric={self.metric} thresholds={self.press_off}/{self.press_on} '
+            f'metric={self.metric} sum_max={self.sum_max:.0f} '
             f'STM32_target={self.stm32_target}±{self.stm32_range} ({target_low}-{target_high})'
         )
 
@@ -360,48 +366,21 @@ class TactileFeedbackNode(Node):
         v = float(grid.sum()) if self.metric == 'sum' else float(grid.max())
         now = time.time()
 
-        # 三阶段力度引导映射
-        # 目标：sum=100±20 (80-120)
-        # 编码：0-84(太弱) | 85-170(目标) | 171-255(太强)
-        TARGET_CENTER = 150.0
-        TARGET_RANGE = 20.0
-        TARGET_LOW = TARGET_CENTER - TARGET_RANGE   # 80
-        TARGET_HIGH = TARGET_CENTER + TARGET_RANGE  # 120
-
-        STAGE_WEAK_MAX = 84
-        STAGE_TARGET_MIN = 85
-        STAGE_TARGET_MAX = 170
-        STAGE_STRONG_MIN = 171
-
-        if v < TARGET_LOW:
-            # 阶段1：太弱 (sum < 80)
-            # 映射到 0-84，越接近目标值越大
-            ratio = v / TARGET_LOW if TARGET_LOW > 0 else 0
-            force = int(ratio * STAGE_WEAK_MAX)
-        elif v <= TARGET_HIGH:
-            # 阶段2：目标区间 (80 <= sum <= 120)
-            # 映射到 85-170，中心点127
-            ratio = (v - TARGET_LOW) / (TARGET_HIGH - TARGET_LOW)
-            force = int(STAGE_TARGET_MIN + ratio * (STAGE_TARGET_MAX - STAGE_TARGET_MIN))
-        else:
-            # 阶段3：太强 (sum > 120)
-            # 映射到 171-255，超出越多值越大
-            # 设定一个合理的上限，比如 sum=300 对应 force=255
-            max_over = 180.0  # sum超出120后再+180达到满量程
-            over = min(v - TARGET_HIGH, max_over)
-            ratio = over / max_over
-            force = int(STAGE_STRONG_MIN + ratio * (255 - STAGE_STRONG_MIN))
-
+        # 简单线性归一化：sum [0, sum_max] -> force [0, 255]
+        # 上位机只负责归一化，三段(WEAK/TARGET/STRONG)由下位机按 target±range 判断
+        v_clamped = max(0.0, min(v, self.sum_max))
+        force = int(v_clamped / self.sum_max * 255) if self.sum_max > 0 else 0
         force = max(0, min(255, force))
 
-        # 状态判定和阶段识别
+        # 状态判定 + 当前阶段识别（仅用于日志，与下位机判断保持一致）
         prev_alarm = self.state_alarm
         self.state_alarm = (force > 0)
 
-        # 判断当前阶段（用于日志）
-        if force <= STAGE_WEAK_MAX:
+        target_low_force = max(0, self.stm32_target - self.stm32_range)
+        target_high_force = min(255, self.stm32_target + self.stm32_range)
+        if force < target_low_force:
             stage = "WEAK"
-        elif force <= STAGE_TARGET_MAX:
+        elif force <= target_high_force:
             stage = "TARGET"
         else:
             stage = "STRONG"

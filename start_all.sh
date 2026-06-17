@@ -85,7 +85,8 @@ PRESS_ON="${PRESS_ON:-300.0}"
 METRIC="${METRIC:-sum}"
 HAND="${HAND:-left}"  # left / right / both
 TARGET="${TARGET:-127}"  # 下位机目标值 (1-255)
-RANGE="${RANGE:-20}"     # 下位机目标范围 (0-127)
+RANGE="${RANGE:-43}"     # 下位机目标范围 (0-127)，默认±43对应force三段边界
+SUM_MAX="${SUM_MAX:-1000}"  # sum归一化上限：sum [0,SUM_MAX] -> force [0,255]
 
 ENV_CMD="source $ROS_SETUP && [ -f $ROS2_WS_SETUP ] && source $ROS2_WS_SETUP; cd $WS_DIR"
 HOLD_CMD='echo; echo "[已退出] 按回车关闭窗口"; read'
@@ -121,14 +122,14 @@ fi
 sleep 3
 
 # Feedback
-FB_CMD="python3 tactile_feedback.py --ros-args -p press_off:=$PRESS_OFF -p press_on:=$PRESS_ON -p metric:=$METRIC -p hand:=$HAND -p target:=$TARGET -p range:=$RANGE"
+FB_CMD="python3 tactile_feedback.py --ros-args -p press_off:=$PRESS_OFF -p press_on:=$PRESS_ON -p metric:=$METRIC -p hand:=$HAND -p target:=$TARGET -p range:=$RANGE -p sum_max:=$SUM_MAX"
 TARGET_LOW=$((TARGET > RANGE ? TARGET - RANGE : 0))
 TARGET_HIGH=$((TARGET + RANGE > 255 ? 255 : TARGET + RANGE))
 if [ "$MODE" = "gui" ] && start_gui "HIT Feedback" "$FB_CMD"; then
-    echo -e "${G}  ✓ Feedback 启动 (hand=$HAND metric=$METRIC 阈值 $PRESS_OFF/$PRESS_ON STM32目标 $TARGET±$RANGE→$TARGET_LOW-$TARGET_HIGH)${N}"
+    echo -e "${G}  ✓ Feedback 启动 (hand=$HAND sum_max=$SUM_MAX STM32目标 $TARGET±$RANGE→$TARGET_LOW-$TARGET_HIGH)${N}"
 else
     start_bg "feedback" "$FB_CMD"
-    echo -e "${G}  ✓ Feedback 启动 (后台, hand=$HAND metric=$METRIC 阈值 $PRESS_OFF/$PRESS_ON STM32目标 $TARGET±$RANGE→$TARGET_LOW-$TARGET_HIGH)${N}"
+    echo -e "${G}  ✓ Feedback 启动 (后台, hand=$HAND sum_max=$SUM_MAX STM32目标 $TARGET±$RANGE→$TARGET_LOW-$TARGET_HIGH)${N}"
 fi
 sleep 1
 
